@@ -8,15 +8,11 @@ function getSupabase() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is missing."
-    );
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
   }
 
   if (!key) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is missing."
-    );
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   }
 
   return createClient(url, key, {
@@ -33,16 +29,44 @@ function getSupabase() {
 // ======================================================
 
 function classifyStock(companyName, symbol) {
+  const name = String(companyName || "")
+    .toUpperCase()
+    .trim();
 
-  const name =
-    String(companyName || "")
-      .toUpperCase()
-      .trim();
+  const sym = String(symbol || "")
+    .toUpperCase()
+    .trim();
 
-  const sym =
-    String(symbol || "")
-      .toUpperCase()
-      .trim();
+
+  // ====================================================
+  // DEFENCE
+  // ====================================================
+
+  const defenceWords = [
+    "DEFENCE",
+    "DEFENSE",
+    "AEROSPACE",
+    "BHARAT ELECTRONICS",
+    "HINDUSTAN AERONAUTICS",
+    "BEML",
+    "MAZAGON",
+    "COCHIN SHIPYARD",
+    "GARDEN REACH",
+    "Bharat Dynamics".toUpperCase(),
+    "MIDHANI",
+    "SOLAR INDUSTRIES",
+  ];
+
+  if (
+    defenceWords.some(
+      (word) => name.includes(word)
+    )
+  ) {
+    return {
+      security_type: "DEFENCE",
+      sector: "DEFENCE & AEROSPACE",
+    };
+  }
 
 
   // ====================================================
@@ -56,8 +80,7 @@ function classifyStock(companyName, symbol) {
 
   if (
     bankWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
@@ -84,19 +107,17 @@ function classifyStock(companyName, symbol) {
     "BROKER",
     "INSURANCE",
     "LIFE INSURANCE",
+    "MONEY",
   ];
 
   if (
     financialWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "FINANCIAL",
-      sector:
-        "FINANCIAL SERVICES",
+      security_type: "FINANCIAL",
+      sector: "FINANCIAL SERVICES",
     };
   }
 
@@ -115,19 +136,18 @@ function classifyStock(companyName, symbol) {
     "HEALTHCARE",
     "HOSPITAL",
     "HOSPITALS",
+    "LABORATORIES",
+    "LABS",
   ];
 
   if (
     pharmaWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "PHARMA_HEALTHCARE",
-      sector:
-        "PHARMA & HEALTHCARE",
+      security_type: "PHARMA_HEALTHCARE",
+      sector: "PHARMA & HEALTHCARE",
     };
   }
 
@@ -143,19 +163,17 @@ function classifyStock(companyName, symbol) {
     "IT SERVICES",
     "SYSTEMS",
     "DIGITAL",
+    "COMPUTER",
   ];
 
   if (
     technologyWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "TECHNOLOGY",
-      sector:
-        "IT & TECHNOLOGY",
+      security_type: "TECHNOLOGY",
+      sector: "IT & TECHNOLOGY",
     };
   }
 
@@ -176,15 +194,12 @@ function classifyStock(companyName, symbol) {
 
   if (
     energyWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "ENERGY",
-      sector:
-        "POWER & ENERGY",
+      security_type: "ENERGY",
+      sector: "POWER & ENERGY",
     };
   }
 
@@ -202,15 +217,12 @@ function classifyStock(companyName, symbol) {
 
   if (
     oilGasWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "OIL_GAS",
-      sector:
-        "OIL & GAS",
+      security_type: "OIL_GAS",
+      sector: "OIL & GAS",
     };
   }
 
@@ -233,21 +245,18 @@ function classifyStock(companyName, symbol) {
 
   if (
     metalsWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "METALS_MINING",
-      sector:
-        "METALS & MINING",
+      security_type: "METALS_MINING",
+      sector: "METALS & MINING",
     };
   }
 
 
   // ====================================================
-  // CEMENT / CONSTRUCTION
+  // CONSTRUCTION / INFRA
   // ====================================================
 
   const constructionWords = [
@@ -264,40 +273,40 @@ function classifyStock(companyName, symbol) {
 
   if (
     constructionWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "CONSTRUCTION_INFRA",
-      sector:
-        "CONSTRUCTION & INFRASTRUCTURE",
+      security_type: "CONSTRUCTION_INFRA",
+      sector: "CONSTRUCTION & INFRASTRUCTURE",
     };
   }
 
 
   // ====================================================
-  // DEFENCE
+  // AUTOMOBILE
   // ====================================================
 
-  const defenceWords = [
-    "DEFENCE",
-    "DEFENSE",
-    "AEROSPACE",
+  const autoWords = [
+    "MOTOR",
+    "MOTORS",
+    "AUTOMOBILE",
+    "AUTOMOTIVE",
+    "AUTO",
+    "MOBILITY",
+    "MOTHERSON",
+    "TYRE",
+    "TIRES",
   ];
 
   if (
-    defenceWords.some(
-      (word) =>
-        name.includes(word)
+    autoWords.some(
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "DEFENCE",
-      sector:
-        "DEFENCE & AEROSPACE",
+      security_type: "AUTOMOBILE",
+      sector: "AUTOMOBILE & AUTO COMPONENTS",
     };
   }
 
@@ -315,46 +324,12 @@ function classifyStock(companyName, symbol) {
 
   if (
     chemicalWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "CHEMICALS",
-      sector:
-        "CHEMICALS & FERTILIZERS",
-    };
-  }
-
-
-  // ====================================================
-  // AUTOMOBILE / AUTO COMPONENTS
-  // ====================================================
-
-  const autoWords = [
-    "MOTOR",
-    "MOTORS",
-    "AUTOMOBILE",
-    "AUTOMOTIVE",
-    "AUTO",
-    "MOBILITY",
-    "MOTHERSON",
-    "TYRE",
-    "TIRES",
-  ];
-
-  if (
-    autoWords.some(
-      (word) =>
-        name.includes(word)
-    )
-  ) {
-    return {
-      security_type:
-        "AUTOMOBILE",
-      sector:
-        "AUTOMOBILE & AUTO COMPONENTS",
+      security_type: "CHEMICALS",
+      sector: "CHEMICALS & FERTILIZERS",
     };
   }
 
@@ -376,15 +351,12 @@ function classifyStock(companyName, symbol) {
 
   if (
     consumerWords.some(
-      (word) =>
-        name.includes(word)
+      (word) => name.includes(word)
     )
   ) {
     return {
-      security_type:
-        "CONSUMER",
-      sector:
-        "CONSUMER",
+      security_type: "CONSUMER",
+      sector: "CONSUMER",
     };
   }
 
@@ -394,50 +366,34 @@ function classifyStock(companyName, symbol) {
   // ====================================================
 
   return {
-    security_type:
-      "OTHER",
-
-    sector:
-      "OTHER",
+    security_type: "OTHER",
+    sector: "OTHER",
   };
 }
 
 
 // ======================================================
-// GET /api/classify-stock
+// GET
 // ======================================================
 
 export async function GET(request) {
-
   try {
-
-    const supabase =
-      getSupabase();
+    const supabase = getSupabase();
 
     const { searchParams } =
       new URL(request.url);
 
     const symbol =
-      searchParams.get(
-        "symbol"
-      );
+      searchParams.get("symbol");
 
     const instrumentId =
-      searchParams.get(
-        "instrument_id"
-      );
+      searchParams.get("instrument_id");
 
-
-    if (
-      !symbol &&
-      !instrumentId
-    ) {
+    if (!symbol && !instrumentId) {
       return NextResponse.json({
         success: false,
         error:
           "Provide symbol or instrument_id.",
-        example:
-          "/api/classify-stock?symbol=INE263A01024",
       });
     }
 
@@ -454,17 +410,13 @@ export async function GET(request) {
         )
         .limit(1);
 
-
     if (instrumentId) {
-
       query =
         query.eq(
           "id",
           instrumentId
         );
-
     } else {
-
       query =
         query.eq(
           "symbol",
@@ -472,35 +424,26 @@ export async function GET(request) {
         );
     }
 
-
     const {
       data,
       error,
     } = await query;
 
-
     if (error) {
-
       return NextResponse.json({
         success: false,
-        step:
-          "find_instrument",
-        error:
-          error.message,
+        step: "find_instrument",
+        error: error.message,
       });
     }
-
 
     const instrument =
       data?.[0];
 
-
     if (!instrument) {
-
       return NextResponse.json({
         success: false,
-        step:
-          "find_instrument",
+        step: "find_instrument",
         error:
           "Instrument not found.",
       });
@@ -524,8 +467,7 @@ export async function GET(request) {
 
     const {
       data: saved,
-      error:
-        saveError,
+      error: saveError,
     } = await supabase
       .from("instruments")
       .update({
@@ -542,9 +484,7 @@ export async function GET(request) {
       .select()
       .single();
 
-
     if (saveError) {
-
       return NextResponse.json({
         success: false,
         step:
@@ -556,7 +496,6 @@ export async function GET(request) {
 
 
     return NextResponse.json({
-
       success: true,
 
       message:
@@ -578,14 +517,12 @@ export async function GET(request) {
       saved,
     });
 
-
   } catch (error) {
 
     return NextResponse.json(
       {
         success: false,
-        step:
-          "server",
+        step: "server",
         error:
           error instanceof Error
             ? error.message
