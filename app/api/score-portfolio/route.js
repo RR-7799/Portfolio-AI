@@ -4,77 +4,630 @@ import { createClient } from "@supabase/supabase-js";
 export const dynamic = "force-dynamic";
 
 function getSupabase() {
-  const supabaseUrl =
-    process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const supabaseKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is missing."
-    );
+  if (!url) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
   }
 
-  if (!supabaseKey) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is missing."
-    );
+  if (!key) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   }
 
-  return createClient(
-    supabaseUrl,
-    supabaseKey,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    }
-  );
+  return createClient(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
 }
 
 
 // ======================================================
-// AI SCORE CALCULATION
+// BHARATSTOCK HELPER
+// ======================================================
+
+async function bharatStockFetch(url) {
+  const apiKey =
+    process.env.BHARATSTOCK_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "BHARATSTOCK_API_KEY is missing."
+    );
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "X-API-Key": apiKey,
+    },
+    cache: "no-store",
+  });
+
+  const text = await response.text();
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+
+  return {
+    response,
+    data,
+    text,
+  };
+}
+
+
+// ======================================================
+// SYNC ONE STOCK
+// ======================================================
+
+async function syncStock(
+  supabase,
+  instrument
+) {
+  const symbol =
+    String(
+      instrument.symbol || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  if (!symbol) {
+    return {
+      success: false,
+      error:
+        "Instrument has no symbol.",
+    };
+  }
+
+
+  // ----------------------------------------------------
+  // FINANCIALS
+  // ----------------------------------------------------
+
+  const financialUrl =
+    `https://bharatstockapi.com/v1/stocks/${encodeURIComponent(
+      symbol
+    )}/financials?period_type=annual&page=1&page_size=5`;
+
+  const financial =
+    await bharatStockFetch(
+      financialUrl
+    );
+
+  if (!financial.response.ok) {
+    return {
+      success: false,
+      step: "financials",
+      error:
+        "BharatStock financials request failed.",
+      status:
+        financial.response.status,
+      response:
+        financial.data ||
+        financial.text,
+    };
+  }
+
+  const rows =
+    financial.data?.data;
+
+  if (
+    !Array.isArray(rows) ||
+    rows.length === 0
+  ) {
+    return {
+      success: false,
+      step: "financials",
+      error:
+        "BharatStock returned no annual financial data.",
+    };
+  }
+
+  const annualRows =
+    rows.filter(
+      (row) =>
+        row.period_type ===
+        "annual"
+    );
+
+  if (annualRows.length === 0) {
+    return {
+      success: false,
+      step: "financials",
+      error:
+        "No annual financial records found.",
+    };
+  }
+
+  const latest =
+    annualRows[0];
+
+  const previous =
+    annualRows[1] || null;
+
+
+  // ----------------------------------------------------
+  // GROWTH
+  // ----------------------------------------------------
+
+  function growth(
+    current,
+    old
+  ) {
+    if (
+      old === null ||
+      old === undefined ||
+      Number(old) === 0
+    ) {
+      return null;
+    }
+
+    return Number(
+      (
+        ((Number(current) -
+          Number(old)) /
+          Math.abs(
+            Number(old)
+          )) *
+        100
+      ).toFixed(2)
+    );
+  }
+
+  const currentRevenue =
+    Number(
+      latest.revenue || 0
+    );
+
+  const previousRevenue =
+    Number(
+      previous?.revenue || 0
+    );
+
+  const currentProfit =
+    Number(
+      latest.net_profit_attributable_to_owners ??
+      latest.net_profit ??
+      0
+    );
+
+  const previousProfit =
+    Number(
+      previous?.net_profit_attributable_to_owners ??
+      previous?.net_profit ??
+      0
+    );
+
+  const salesGrowth =
+    previous
+      ? growth(
+          currentRevenue,
+          previousRevenue
+        )
+      : null;
+
+  const profitGrowth =
+    previous
+      ? growth(
+          currentProfit,
+          previousProfit
+        )
+      : null;
+
+
+  // ----------------------------------------------------
+  // PROFITABILITY
+  // ----------------------------------------------------
+
+  const equity =
+    Number(
+      latest.equity_attributable_to_owners ??
+      latest.total_equity ??
+      0
+    );
+
+  const nonCurrentDebt =
+    Number(
+      latest.borrowings_non_current ||
+        0
+    );
+
+  const currentDebt =
+    Number(
+      latest.borrowings_current ||
+        0
+    );
+
+  const totalDebt =
+    nonCurrentDebt +
+    currentDebt;
+
+  const debtToEquity =
+    equity > 0
+      ? Number(
+          (
+            totalDebt /
+            equity
+          ).toFixed(4)
+        )
+      : null;
+
+  const roe =
+    equity > 0
+      ? Number(
+          (
+            (currentProfit /
+              equity) *
+            100
+          ).toFixed(2)
+        )
+      : null;
+
+  const ebit =
+    Number(
+      latest.profit_before_tax ||
+        0
+    ) +
+    Number(
+      latest.finance_costs ||
+        0
+    );
+
+  const capital =
+    equity + totalDebt;
+
+  const roce =
+    capital > 0
+      ? Number(
+          (
+            (ebit /
+              capital) *
+            100
+          ).toFixed(2)
+        )
+      : null;
+
+
+  // ----------------------------------------------------
+  // CASH FLOW
+  // ----------------------------------------------------
+
+  const operatingCashFlow =
+    Number(
+      latest.cash_flow_operating ||
+        0
+    );
+
+
+  // ----------------------------------------------------
+  // SHAREHOLDING
+  // ----------------------------------------------------
+
+  let promoterHolding = null;
+  let fiiHolding = null;
+  let diiHolding = null;
+  let shareholdingDate = null;
+
+  try {
+    const shareUrl =
+      `https://bharatstockapi.com/v1/stocks/${encodeURIComponent(
+        symbol
+      )}/shareholding?page=1&page_size=20`;
+
+    const share =
+      await bharatStockFetch(
+        shareUrl
+      );
+
+    const shareRows =
+      share.data?.data;
+
+    if (
+      share.response.ok &&
+      Array.isArray(shareRows) &&
+      shareRows.length > 0
+    ) {
+      const latestShare =
+        shareRows[0];
+
+      promoterHolding =
+        latestShare.promoter_pct ??
+        null;
+
+      fiiHolding =
+        latestShare.fii_pct ??
+        null;
+
+      diiHolding =
+        latestShare.dii_pct ??
+        null;
+
+      shareholdingDate =
+        latestShare.as_on_date ??
+        null;
+    }
+  } catch (error) {
+    console.error(
+      `Shareholding failed for ${symbol}:`,
+      error
+    );
+  }
+
+
+  // ----------------------------------------------------
+  // VALUATION
+  // ----------------------------------------------------
+
+  let marketCap = null;
+  let peRatio = null;
+  let pbRatio = null;
+  let bookValuePerShare = null;
+  let eps = null;
+  let dividendYield = null;
+  let week52High = null;
+  let week52Low = null;
+  let valuationDate = null;
+
+  try {
+    const valuationUrl =
+      `https://bharatstockapi.com/v1/stocks/${encodeURIComponent(
+        symbol
+      )}/ratios`;
+
+    const valuation =
+      await bharatStockFetch(
+        valuationUrl
+      );
+
+    if (
+      valuation.response.ok &&
+      valuation.data?.data
+    ) {
+      const v =
+        valuation.data.data;
+
+      valuationDate =
+        v.as_of_date ?? null;
+
+      marketCap =
+        v.market_cap ?? null;
+
+      peRatio =
+        v.pe_ratio ?? null;
+
+      pbRatio =
+        v.pb_ratio ?? null;
+
+      bookValuePerShare =
+        v.book_value_per_share ??
+        null;
+
+      eps =
+        v.eps ?? null;
+
+      dividendYield =
+        v.dividend_yield ?? null;
+
+      week52High =
+        v.week_52_high ?? null;
+
+      week52Low =
+        v.week_52_low ?? null;
+    }
+  } catch (error) {
+    console.error(
+      `Valuation failed for ${symbol}:`,
+      error
+    );
+  }
+
+
+  // ----------------------------------------------------
+  // SAVE FUNDAMENTALS
+  // ----------------------------------------------------
+
+  const record = {
+    instrument_id:
+      instrument.id,
+
+    sales_growth:
+      salesGrowth,
+
+    profit_growth:
+      profitGrowth,
+
+    roe,
+
+    roce,
+
+    debt_to_equity:
+      debtToEquity,
+
+    promoter_holding:
+      promoterHolding,
+
+    promoter_pledge:
+      null,
+
+    fii_holding:
+      fiiHolding,
+
+    dii_holding:
+      diiHolding,
+
+    operating_cash_flow:
+      operatingCashFlow,
+
+    free_cash_flow:
+      null,
+
+    financial_year:
+      latest.fiscal_year ||
+      null,
+
+    quarter:
+      null,
+
+    source:
+      "BharatStock",
+
+    updated_at:
+      new Date().toISOString(),
+
+    market_cap:
+      marketCap,
+
+    pe_ratio:
+      peRatio,
+
+    pb_ratio:
+      pbRatio,
+
+    book_value_per_share:
+      bookValuePerShare,
+
+    eps,
+
+    dividend_yield:
+      dividendYield,
+
+    week_52_high:
+      week52High,
+
+    week_52_low:
+      week52Low,
+
+    shareholding_date:
+      shareholdingDate,
+  };
+
+
+  const {
+    data: saved,
+    error: saveError,
+  } = await supabase
+    .from("fundamentals")
+    .upsert(
+      record,
+      {
+        onConflict:
+          "instrument_id",
+      }
+    )
+    .select()
+    .single();
+
+  if (saveError) {
+    return {
+      success: false,
+      step:
+        "save_fundamentals",
+      error:
+        saveError.message,
+    };
+  }
+
+
+  return {
+    success: true,
+
+    financialYear:
+      latest.fiscal_year ||
+      null,
+
+    salesGrowth,
+    profitGrowth,
+    roe,
+    roce,
+    debtToEquity,
+    operatingCashFlow,
+
+    promoterHolding,
+    fiiHolding,
+    diiHolding,
+
+    marketCap,
+    peRatio,
+    pbRatio,
+
+    savedId:
+      saved?.id || null,
+  };
+}
+
+
+// ======================================================
+// SCORE ENGINE
 // ======================================================
 
 function calculateScore(f) {
+
   const salesGrowth =
-    Number(f.sales_growth ?? 0);
+    Number(
+      f.sales_growth ?? 0
+    );
 
   const profitGrowth =
-    Number(f.profit_growth ?? 0);
+    Number(
+      f.profit_growth ?? 0
+    );
 
   const roe =
-    Number(f.roe ?? 0);
+    Number(
+      f.roe ?? 0
+    );
 
   const roce =
-    Number(f.roce ?? 0);
+    Number(
+      f.roce ?? 0
+    );
 
   const debtToEquity =
-    Number(f.debt_to_equity ?? 0);
+    Number(
+      f.debt_to_equity ?? 0
+    );
 
   const promoter =
-    Number(f.promoter_holding ?? 0);
+    Number(
+      f.promoter_holding ?? 0
+    );
 
   const fii =
-    Number(f.fii_holding ?? 0);
+    Number(
+      f.fii_holding ?? 0
+    );
 
   const dii =
-    Number(f.dii_holding ?? 0);
+    Number(
+      f.dii_holding ?? 0
+    );
 
   const operatingCashFlow =
-    Number(f.operating_cash_flow ?? 0);
+    Number(
+      f.operating_cash_flow ?? 0
+    );
 
   const netProfit =
-    Number(f.net_profit ?? 0);
+    Number(
+      f.net_profit ?? 0
+    );
 
   const pe =
-    Number(f.pe_ratio ?? 0);
+    Number(
+      f.pe_ratio ?? 0
+    );
 
   const pb =
-    Number(f.pb_ratio ?? 0);
+    Number(
+      f.pb_ratio ?? 0
+    );
 
 
   // ====================================================
@@ -145,8 +698,6 @@ function calculateScore(f) {
     debtScore = 6;
   } else if (debtToEquity <= 1) {
     debtScore = 3;
-  } else {
-    debtScore = 0;
   }
 
 
@@ -181,7 +732,10 @@ function calculateScore(f) {
   }
 
   ownershipScore =
-    Math.min(ownershipScore, 10);
+    Math.min(
+      ownershipScore,
+      10
+    );
 
 
   // ====================================================
@@ -194,16 +748,32 @@ function calculateScore(f) {
     cashflowScore += 5;
   }
 
+  /*
+   * IMPORTANT:
+   *
+   * fundamentals currently does not
+   * necessarily contain net_profit.
+   *
+   * Therefore we don't award the second
+   * 5 points unless we can actually
+   * verify cash flow against profit.
+   */
+
   if (
-    operatingCashFlow > 0 &&
-    netProfit > 0 &&
-    operatingCashFlow >= netProfit
+    f.net_profit !== null &&
+    f.net_profit !== undefined &&
+    Number(f.net_profit) > 0 &&
+    operatingCashFlow >=
+      Number(f.net_profit)
   ) {
     cashflowScore += 5;
   }
 
   cashflowScore =
-    Math.min(cashflowScore, 10);
+    Math.min(
+      cashflowScore,
+      10
+    );
 
 
   // ====================================================
@@ -212,7 +782,15 @@ function calculateScore(f) {
 
   let valuationScore = 0;
 
+  /*
+   * Missing valuation = 0 points.
+   *
+   * We NEVER assume a stock is cheap
+   * when valuation data is unavailable.
+   */
+
   if (pe > 0) {
+
     if (pe <= 15) {
       valuationScore += 10;
     } else if (pe <= 25) {
@@ -225,6 +803,7 @@ function calculateScore(f) {
   }
 
   if (pb > 0) {
+
     if (pb <= 2) {
       valuationScore += 5;
     } else if (pb <= 4) {
@@ -235,7 +814,10 @@ function calculateScore(f) {
   }
 
   valuationScore =
-    Math.min(valuationScore, 15);
+    Math.min(
+      valuationScore,
+      15
+    );
 
 
   // ====================================================
@@ -250,9 +832,15 @@ function calculateScore(f) {
     riskQualityScore += 3;
   }
 
-  if (roe >= 15 && roce >= 15) {
+  if (
+    roe >= 15 &&
+    roce >= 15
+  ) {
     riskQualityScore += 5;
-  } else if (roe >= 10 && roce >= 10) {
+  } else if (
+    roe >= 10 &&
+    roce >= 10
+  ) {
     riskQualityScore += 3;
   }
 
@@ -269,7 +857,10 @@ function calculateScore(f) {
   }
 
   riskQualityScore =
-    Math.min(riskQualityScore, 15);
+    Math.min(
+      riskQualityScore,
+      15
+    );
 
 
   // ====================================================
@@ -341,10 +932,6 @@ function calculateScore(f) {
   }
 
 
-  // ====================================================
-  // SUMMARY
-  // ====================================================
-
   const aiSummary =
     `Portfolio AI Score: ${totalScore}/100. ` +
     `Rating: ${rating}. ` +
@@ -356,6 +943,7 @@ function calculateScore(f) {
     `Cash Flow ${cashflowScore}/10, ` +
     `Valuation ${valuationScore}/15, ` +
     `Risk/Quality ${riskQualityScore}/15.`;
+
 
   return {
     totalScore,
@@ -379,12 +967,15 @@ function calculateScore(f) {
 // ======================================================
 
 export async function GET() {
+
   try {
-    const supabase = getSupabase();
+
+    const supabase =
+      getSupabase();
 
 
     // ==================================================
-    // STEP 1 — LOAD HOLDINGS
+    // 1. LOAD ALL HOLDINGS
     // ==================================================
 
     const {
@@ -396,48 +987,53 @@ export async function GET() {
         `
         id,
         user_id,
-        instrument_id,
-        quantity,
-        invested_value,
-        current_value
+        instrument_id
         `
       );
+
 
     if (holdingsError) {
       return NextResponse.json({
         success: false,
         step: "holdings",
-        error: holdingsError.message,
+        error:
+          holdingsError.message,
       });
     }
 
-    if (!holdings || holdings.length === 0) {
+
+    if (
+      !holdings ||
+      holdings.length === 0
+    ) {
       return NextResponse.json({
         success: false,
         step: "holdings",
-        error: "No holdings found.",
+        error:
+          "No stock holdings found.",
       });
     }
 
 
     // ==================================================
-    // STEP 2 — UNIQUE INSTRUMENT IDS
+    // 2. UNIQUE INSTRUMENTS
     // ==================================================
 
-    const instrumentIds = [
-      ...new Set(
-        holdings
-          .map(
-            (holding) =>
-              holding.instrument_id
-          )
-          .filter(Boolean)
-      ),
-    ];
+    const instrumentIds =
+      [
+        ...new Set(
+          holdings
+            .map(
+              (h) =>
+                h.instrument_id
+            )
+            .filter(Boolean)
+        ),
+      ];
 
 
     // ==================================================
-    // STEP 3 — LOAD INSTRUMENTS
+    // 3. LOAD INSTRUMENTS
     // ==================================================
 
     const {
@@ -448,7 +1044,11 @@ export async function GET() {
       .select(
         "id, symbol, company_name"
       )
-      .in("id", instrumentIds);
+      .in(
+        "id",
+        instrumentIds
+      );
+
 
     if (instrumentsError) {
       return NextResponse.json({
@@ -462,22 +1062,24 @@ export async function GET() {
 
     const instrumentMap =
       new Map(
-        (instruments || []).map(
-          (instrument) => [
-            instrument.id,
-            instrument,
-          ]
-        )
+        (instruments || [])
+          .map(
+            (item) => [
+              item.id,
+              item,
+            ]
+          )
       );
 
 
     // ==================================================
-    // STEP 4 — LOAD FUNDAMENTALS
+    // 4. LOAD EXISTING FUNDAMENTALS
     // ==================================================
 
     const {
-      data: fundamentals,
-      error: fundamentalsError,
+      data: existingFundamentals,
+      error:
+        fundamentalsError,
     } = await supabase
       .from("fundamentals")
       .select("*")
@@ -485,6 +1087,7 @@ export async function GET() {
         "instrument_id",
         instrumentIds
       );
+
 
     if (fundamentalsError) {
       return NextResponse.json({
@@ -496,30 +1099,31 @@ export async function GET() {
     }
 
 
-    // ==================================================
-    // STEP 5 — FUNDAMENTALS MAP
-    // ==================================================
-
     const fundamentalsMap =
       new Map();
 
+
     for (
-      const row of fundamentals || []
+      const row of
+        existingFundamentals || []
     ) {
-      const existing =
+
+      const current =
         fundamentalsMap.get(
           row.instrument_id
         );
 
+
       if (
-        !existing ||
+        !current ||
         new Date(
           row.updated_at || 0
         ) >
           new Date(
-            existing.updated_at || 0
+            current.updated_at || 0
           )
       ) {
+
         fundamentalsMap.set(
           row.instrument_id,
           row
@@ -529,18 +1133,12 @@ export async function GET() {
 
 
     // ==================================================
-    // STEP 6 — SCORE STOCKS
+    // 5. PROCESS STOCKS
     // ==================================================
 
     const results = [];
     const skipped = [];
-
-    /*
-     * Only score each instrument once.
-     *
-     * This is important because your database
-     * currently has UNIQUE(instrument_id).
-     */
+    const synced = [];
 
     const processed =
       new Set();
@@ -555,10 +1153,13 @@ export async function GET() {
           holding.instrument_id
         );
 
+
       if (!instrument) {
+
         skipped.push({
           instrument_id:
             holding.instrument_id,
+
           reason:
             "Instrument not found.",
         });
@@ -567,7 +1168,10 @@ export async function GET() {
       }
 
 
-      // Avoid duplicate scoring
+      // ----------------------------------------------
+      // Avoid duplicate instruments
+      // ----------------------------------------------
+
       if (
         processed.has(
           instrument.id
@@ -581,50 +1185,156 @@ export async function GET() {
       );
 
 
-      const fundamental =
+      // ----------------------------------------------
+      // GET FUNDAMENTALS
+      // ----------------------------------------------
+
+      let fundamental =
         fundamentalsMap.get(
           instrument.id
         );
 
+
+      // ----------------------------------------------
+      // MISSING → SYNC BHARATSTOCK
+      // ----------------------------------------------
+
       if (!fundamental) {
 
-        skipped.push({
-          symbol:
-            instrument.symbol,
+        try {
 
-          company_name:
-            instrument.company_name,
+          const sync =
+            await syncStock(
+              supabase,
+              instrument
+            );
 
-          reason:
-            "Fundamentals not available.",
-        });
 
-        continue;
+          if (!sync.success) {
+
+            skipped.push({
+              symbol:
+                instrument.symbol,
+
+              company_name:
+                instrument.company_name,
+
+              reason:
+                sync.error ||
+                "Unable to sync fundamentals.",
+
+              step:
+                sync.step ||
+                "sync",
+            });
+
+            continue;
+          }
+
+
+          synced.push({
+            symbol:
+              instrument.symbol,
+
+            company_name:
+              instrument.company_name,
+          });
+
+
+          // Reload the saved fundamentals
+          const {
+            data: refreshed,
+            error:
+              refreshedError,
+          } = await supabase
+            .from("fundamentals")
+            .select("*")
+            .eq(
+              "instrument_id",
+              instrument.id
+            )
+            .limit(1);
+
+
+          if (
+            refreshedError ||
+            !refreshed?.[0]
+          ) {
+
+            skipped.push({
+              symbol:
+                instrument.symbol,
+
+              company_name:
+                instrument.company_name,
+
+              reason:
+                "Fundamentals synced but could not be reloaded.",
+            });
+
+            continue;
+          }
+
+
+          fundamental =
+            refreshed[0];
+
+        } catch (error) {
+
+          skipped.push({
+            symbol:
+              instrument.symbol,
+
+            company_name:
+              instrument.company_name,
+
+            reason:
+              error instanceof Error
+                ? error.message
+                : String(error),
+          });
+
+          continue;
+        }
       }
 
 
-      // Calculate
+      // ----------------------------------------------
+      // CALCULATE SCORE
+      // ----------------------------------------------
+
       const score =
         calculateScore(
           fundamental
         );
 
 
-      // ==================================================
-      // SAVE
-      // ==================================================
+      // ----------------------------------------------
+      // SAVE AI SCORE
+      // ----------------------------------------------
 
       const record = {
 
         /*
-         * We use the first holding's user_id.
-         * Your current ai_scores table is instrument-based.
+         * Your table currently has
+         * UNIQUE(instrument_id).
+         *
+         * Therefore we intentionally
+         * use instrument_id as the
+         * conflict target.
          */
-        user_id:
-          holding.user_id || null,
 
         instrument_id:
           instrument.id,
+
+        /*
+         * Keep user_id when available.
+         * The score remains instrument-level.
+         */
+
+        user_id:
+          holding.user_id ||
+          null,
 
         total_score:
           score.totalScore,
@@ -670,21 +1380,10 @@ export async function GET() {
       };
 
 
-      /*
-       * IMPORTANT:
-       *
-       * Your database has:
-       *
-       * UNIQUE(instrument_id)
-       *
-       * Therefore the conflict target is ONLY:
-       *
-       * instrument_id
-       */
-
       const {
         data: saved,
-        error: saveError,
+        error:
+          saveScoreError,
       } = await supabase
         .from("ai_scores")
         .upsert(
@@ -698,7 +1397,7 @@ export async function GET() {
         .single();
 
 
-      if (saveError) {
+      if (saveScoreError) {
 
         skipped.push({
           symbol:
@@ -708,12 +1407,19 @@ export async function GET() {
             instrument.company_name,
 
           reason:
-            saveError.message,
+            saveScoreError.message,
+
+          step:
+            "save_score",
         });
 
         continue;
       }
 
+
+      // ----------------------------------------------
+      // RESULT
+      // ----------------------------------------------
 
       results.push({
 
@@ -739,24 +1445,27 @@ export async function GET() {
           score.action,
 
         saved_id:
-          saved?.id || null,
+          saved?.id ||
+          null,
       });
     }
 
 
     // ==================================================
-    // STEP 7 — PORTFOLIO SUMMARY
+    // 6. SUMMARY
     // ==================================================
 
     const scores =
       results.map(
         (item) =>
-          Number(item.score)
+          Number(
+            item.score
+          )
       );
 
 
     const averageScore =
-      scores.length > 0
+      scores.length
         ? Math.round(
             scores.reduce(
               (a, b) =>
@@ -768,19 +1477,19 @@ export async function GET() {
         : null;
 
 
-    const actionCounts = {};
+    const actions = {};
 
 
     for (
-      const item of results
+      const result of results
     ) {
 
-      actionCounts[
-        item.action
+      actions[
+        result.action
       ] =
         (
-          actionCounts[
-            item.action
+          actions[
+            result.action
           ] || 0
         ) + 1;
     }
@@ -805,6 +1514,9 @@ export async function GET() {
         unique_stocks:
           instrumentIds.length,
 
+        newly_synced:
+          synced.length,
+
         scored:
           results.length,
 
@@ -814,14 +1526,16 @@ export async function GET() {
         average_score:
           averageScore,
 
-        actions:
-          actionCounts,
+        actions,
       },
+
+      synced,
 
       results,
 
       skipped,
     });
+
 
   } catch (error) {
 
@@ -830,11 +1544,13 @@ export async function GET() {
       error
     );
 
+
     return NextResponse.json(
       {
         success: false,
 
-        step: "server",
+        step:
+          "server",
 
         error:
           error instanceof Error
