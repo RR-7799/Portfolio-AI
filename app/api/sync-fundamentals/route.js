@@ -14,15 +14,15 @@ const supabase = createClient(
 
 export async function GET() {
   try {
-    // --------------------------------------------------
+    // ==================================================
     // 1. FIND BEL IN OUR DATABASE
-    // --------------------------------------------------
+    // ==================================================
 
     const { data: instrument, error: instrumentError } =
       await supabase
         .from("instruments")
         .select("id, symbol, company_name")
-        .eq("symbol", "BEL")
+        .eq("company_name", "BHARAT ELECTRONICS LTD")
         .single();
 
     if (instrumentError || !instrument) {
@@ -32,22 +32,24 @@ export async function GET() {
           step: "find_instrument",
           error:
             instrumentError?.message ||
-            "BEL not found in instruments",
+            "Bharat Electronics not found",
         },
         { status: 404 }
       );
     }
 
-    // --------------------------------------------------
-    // 2. CALL BHARATSTOCK
-    // --------------------------------------------------
+    // ==================================================
+    // 2. CALL BHARATSTOCK API
+    // ==================================================
 
     const response = await fetch(
       "https://bharatstockapi.com/v1/stocks/BEL/financials?period_type=annual&page=1&page_size=5",
       {
+        method: "GET",
         headers: {
           "X-API-Key":
             process.env.BHARATSTOCK_API_KEY,
+          "Accept": "application/json",
         },
         cache: "no-store",
       }
@@ -67,8 +69,12 @@ export async function GET() {
       );
     }
 
+    // ==================================================
+    // 3. GET FINANCIAL DATA
+    // ==================================================
+
     const financials =
-      result?.data || [];
+      result?.data?.data || [];
 
     if (financials.length === 0) {
       return NextResponse.json(
@@ -76,15 +82,15 @@ export async function GET() {
           success: false,
           step: "financials",
           error:
-            "No annual financial data returned.",
+            "BharatStock returned no annual financial data.",
         },
         { status: 404 }
       );
     }
 
-    // --------------------------------------------------
-    // 3. SORT BY DATE
-    // --------------------------------------------------
+    // ==================================================
+    // 4. SORT BY DATE
+    // ==================================================
 
     financials.sort(
       (a, b) =>
@@ -95,105 +101,111 @@ export async function GET() {
     const latest = financials[0];
     const previous = financials[1];
 
-    // --------------------------------------------------
-    // 4. CALCULATE SALES GROWTH
-    // --------------------------------------------------
+    // ==================================================
+    // 5. SALES GROWTH
+    // ==================================================
 
     let salesGrowth = null;
 
     if (
-      previous?.revenue &&
-      latest?.revenue
+      previous?.revenue != null &&
+      latest?.revenue != null &&
+      Number(previous.revenue) !== 0
     ) {
       salesGrowth =
-        ((latest.revenue -
-          previous.revenue) /
-          previous.revenue) *
+        ((Number(latest.revenue) -
+          Number(previous.revenue)) /
+          Number(previous.revenue)) *
         100;
     }
 
-    // --------------------------------------------------
-    // 5. CALCULATE PROFIT GROWTH
-    // --------------------------------------------------
+    // ==================================================
+    // 6. PROFIT GROWTH
+    // ==================================================
 
     let profitGrowth = null;
 
     if (
-      previous?.net_profit &&
-      latest?.net_profit
+      previous?.net_profit != null &&
+      latest?.net_profit != null &&
+      Number(previous.net_profit) !== 0
     ) {
       profitGrowth =
-        ((latest.net_profit -
-          previous.net_profit) /
-          Math.abs(previous.net_profit)) *
+        ((Number(latest.net_profit) -
+          Number(previous.net_profit)) /
+          Math.abs(
+            Number(previous.net_profit)
+          )) *
         100;
     }
 
-    // --------------------------------------------------
-    // 6. CALCULATE ROE
-    // --------------------------------------------------
+    // ==================================================
+    // 7. ROE
+    // ==================================================
 
     let roe = null;
 
     if (
-      latest?.net_profit &&
-      latest?.total_equity
+      latest?.net_profit != null &&
+      latest?.total_equity != null &&
+      Number(latest.total_equity) !== 0
     ) {
       roe =
-        (latest.net_profit /
-          latest.total_equity) *
+        (Number(latest.net_profit) /
+          Number(latest.total_equity)) *
         100;
     }
 
-    // --------------------------------------------------
-    // 7. CALCULATE ROCE
-    // --------------------------------------------------
+    // ==================================================
+    // 8. ROCE
+    // ==================================================
 
     let roce = null;
 
     const operatingProfit =
-      latest?.operating_profit;
+      Number(latest?.operating_profit || 0);
 
     const totalAssets =
-      latest?.total_assets;
+      Number(latest?.total_assets || 0);
 
     const currentLiabilities =
-      latest?.current_liabilities;
+      Number(
+        latest?.current_liabilities || 0
+      );
+
+    const capitalEmployed =
+      totalAssets - currentLiabilities;
 
     if (
-      operatingProfit != null &&
-      totalAssets != null &&
-      currentLiabilities != null
+      operatingProfit !== 0 &&
+      capitalEmployed > 0
     ) {
-      const capitalEmployed =
-        totalAssets -
-        currentLiabilities;
-
-      if (capitalEmployed > 0) {
-        roce =
-          (operatingProfit /
-            capitalEmployed) *
-          100;
-      }
+      roce =
+        (operatingProfit /
+          capitalEmployed) *
+        100;
     }
 
-    // --------------------------------------------------
-    // 8. DEBT / EQUITY
-    // --------------------------------------------------
+    // ==================================================
+    // 9. DEBT / EQUITY
+    // ==================================================
 
     let debtToEquity =
       latest?.debt_equity_ratio;
 
-    if (
-      debtToEquity == null
-    ) {
-      const debt =
+    if (debtToEquity == null) {
+      const nonCurrentDebt =
         Number(
           latest?.borrowings_non_current || 0
-        ) +
+        );
+
+      const currentDebt =
         Number(
           latest?.borrowings_current || 0
         );
+
+      const totalDebt =
+        nonCurrentDebt + currentDebt;
 
       const equity =
         Number(
@@ -202,13 +214,22 @@ export async function GET() {
 
       if (equity > 0) {
         debtToEquity =
-          debt / equity;
+          totalDebt / equity;
+      } else {
+        debtToEquity = null;
       }
     }
 
-    // --------------------------------------------------
-    // 9. SAVE FUNDAMENTALS
-    // --------------------------------------------------
+    // ==================================================
+    // 10. OPERATING CASH FLOW
+    // ==================================================
+
+    const operatingCashFlow =
+      latest?.cash_flow_operating ?? null;
+
+    // ==================================================
+    // 11. PREPARE DATABASE RECORD
+    // ==================================================
 
     const record = {
       instrument_id: instrument.id,
@@ -244,21 +265,20 @@ export async function GET() {
       debt_to_equity:
         debtToEquity != null
           ? Number(
-              debtToEquity.toFixed(3)
+              Number(debtToEquity).toFixed(3)
             )
           : null,
 
       operating_cash_flow:
-        latest?.cash_flow_operating ??
-        null,
+        operatingCashFlow != null
+          ? Number(operatingCashFlow)
+          : null,
 
       financial_year:
-        latest?.fiscal_year ??
-        null,
+        latest?.fiscal_year || null,
 
       quarter:
-        latest?.quarter ??
-        null,
+        latest?.quarter || null,
 
       source:
         "BharatStock",
@@ -266,6 +286,10 @@ export async function GET() {
       updated_at:
         new Date().toISOString(),
     };
+
+    // ==================================================
+    // 12. SAVE TO FUNDAMENTALS
+    // ==================================================
 
     const { data: saved, error: saveError } =
       await supabase
@@ -292,17 +316,23 @@ export async function GET() {
       );
     }
 
-    // --------------------------------------------------
-    // 10. RETURN RESULTS
-    // --------------------------------------------------
+    // ==================================================
+    // 13. SUCCESS RESPONSE
+    // ==================================================
 
     return NextResponse.json({
       success: true,
 
+      message:
+        "BEL fundamentals successfully synchronized.",
+
       stock: {
-        symbol: instrument.symbol,
+        symbol:
+          instrument.symbol,
+
         company_name:
           instrument.company_name,
+
         instrument_id:
           instrument.id,
       },
@@ -311,7 +341,10 @@ export async function GET() {
         "BharatStock",
 
       latest_period:
-        latest?.fiscal_year,
+        latest?.fiscal_year || null,
+
+      previous_period:
+        previous?.fiscal_year || null,
 
       calculated: {
         sales_growth:
@@ -339,13 +372,19 @@ export async function GET() {
       saved_record:
         saved,
     });
-
   } catch (error) {
+    console.error(
+      "Fundamentals sync error:",
+      error
+    );
+
     return NextResponse.json(
       {
         success: false,
         step: "unexpected_error",
-        error: error.message,
+        error:
+          error?.message ||
+          "Unknown server error",
       },
       { status: 500 }
     );
