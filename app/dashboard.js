@@ -23,23 +23,6 @@ export default function Dashboard() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY") {
-        window.location.href = "/update-password";
-        return;
-      }
-
-      setSession(session);
-
-      if (session) {
-        loadPortfolio(session.user.id);
-      } else {
-        setLoading(false);
-      }
-    });
-
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
 
@@ -50,70 +33,289 @@ export default function Dashboard() {
       }
     });
 
-    return () => subscription.unsubscribe();
+    const {
+      data: listener,
+    } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+
+      if (s) {
+        loadPortfolio(s.user.id);
+      }
+    });
+
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   async function loadPortfolio(userId) {
     setLoading(true);
     setError("");
 
-    const [stockRes, mfRes] = await Promise.all([
-      supabase
-        .from("holdings")
-        .select(
-          "id, quantity, average_price, invested_value, current_value, unrealized_pnl, pnl_percentage"
-        )
-        .eq("user_id", userId),
+    try {
+      // --------------------------------------------------
+      // 1. LOAD STOCK HOLDINGS
+      // --------------------------------------------------
 
-      supabase
-        .from("mf_holdings")
-        .select(
-          "id, units, average_nav, invested_value, current_nav, current_value, unrealized_pnl, pnl_percentage"
-        )
-        .eq("user_id", userId),
-    ]);
+      const { data: stockData, error: stockError } =
+        await supabase
+          .from("holdings")
+          .select(
+            "id, broker_account_id, instrument_id, quantity, average_price, invested_value, current_value, unrealized_pnl, pnl_percentage"
+          )
+          .eq("user_id", userId);
 
-    if (stockRes.error) {
-      setError("Stock data error: " + stockRes.error.message);
+      if (stockError) {
+        throw new Error(
+          "Stock data error: " + stockError.message
+        );
+      }
+
+      const rawStocks = stockData || [];
+
+      // --------------------------------------------------
+      // 2. GET INSTRUMENT IDS
+      // --------------------------------------------------
+
+      const instrumentIds = [
+        ...new Set(
+          rawStocks
+            .map((x) => x.instrument_id)
+            .filter(Boolean)
+        ),
+      ];
+
+      // --------------------------------------------------
+      // 3. LOAD INSTRUMENTS
+      // --------------------------------------------------
+
+      let instruments = [];
+
+      if (instrumentIds.length > 0) {
+        const { data, error } = await supabase
+          .from("instruments")
+          .select("id, symbol, company_name")
+          .in("id", instrumentIds);
+
+        if (error) {
+          throw new Error(
+            "Instrument data error: " + error.message
+          );
+        }
+
+        instruments = data || [];
+      }
+
+      // --------------------------------------------------
+      // 4. GET BROKER IDS
+      // --------------------------------------------------
+
+      const brokerIds = [
+        ...new Set(
+          rawStocks
+            .map((x) => x.broker_account_id)
+            .filter(Boolean)
+        ),
+      ];
+
+      // --------------------------------------------------
+      // 5. LOAD BROKER ACCOUNTS
+      // --------------------------------------------------
+
+      let brokers = [];
+
+      if (brokerIds.length > 0) {
+        const { data, error } = await supabase
+          .from("broker_accounts")
+          .select("id, broker_name")
+          .in("id", brokerIds);
+
+        if (error) {
+          throw new Error(
+            "Broker data error: " + error.message
+          );
+        }
+
+        brokers = data || [];
+      }
+
+      // --------------------------------------------------
+      // 6. CREATE LOOKUP MAPS
+      // --------------------------------------------------
+
+      const instrumentMap = new Map(
+        instruments.map((x) => [x.id, x])
+      );
+
+      const brokerMap = new Map(
+        brokers.map((x) => [x.id, x])
+      );
+
+      // --------------------------------------------------
+      // 7. COMBINE STOCK DATA
+      // --------------------------------------------------
+
+      const combinedStocks = rawStocks.map((holding) => {
+        const instrument =
+          instrumentMap.get(holding.instrument_id);
+
+        const broker =
+          brokerMap.get(holding.broker_account_id);
+
+        return {
+          ...holding,
+
+          symbol:
+            instrument?.symbol || "—",
+
+          company_name:
+            instrument?.company_name || "Unknown Stock",
+
+          broker_name:
+            broker?.broker_name || "—",
+        };
+      });
+
+      // --------------------------------------------------
+      // 8. LOAD MF HOLDINGS
+      // --------------------------------------------------
+
+      const { data: mfData, error: mfError } =
+        await supabase
+          .from("mf_holdings")
+          .select(
+            "id, mutual_fund_id, units, average_nav, invested_value, current_nav, current_value, unrealized_pnl, pnl_percentage"
+          )
+          .eq("user_id", userId);
+
+      if (mfError) {
+        throw new Error(
+          "MF data error: " + mfError.message
+        );
+      }
+
+      const rawMFs = mfData || [];
+
+      // --------------------------------------------------
+      // 9. GET MUTUAL FUND IDS
+      // --------------------------------------------------
+
+      const mfIds = [
+        ...new Set(
+          rawMFs
+            .map((x) => x.mutual_fund_id)
+            .filter(Boolean)
+        ),
+      ];
+
+      // --------------------------------------------------
+      // 10. LOAD MUTUAL FUNDS
+      // --------------------------------------------------
+
+      let mutualFunds = [];
+
+      if (mfIds.length > 0) {
+        const { data, error } = await supabase
+          .from("mutual_funds")
+          .select(
+            "id, scheme_name, fund_house, category"
+          )
+          .in("id", mfIds);
+
+        if (error) {
+          throw new Error(
+            "Mutual fund data error: " + error.message
+          );
+        }
+
+        mutualFunds = data || [];
+      }
+
+      // --------------------------------------------------
+      // 11. MUTUAL FUND LOOKUP
+      // --------------------------------------------------
+
+      const mutualFundMap = new Map(
+        mutualFunds.map((x) => [x.id, x])
+      );
+
+      // --------------------------------------------------
+      // 12. COMBINE MF DATA
+      // --------------------------------------------------
+
+      const combinedMFs = rawMFs.map((holding) => {
+        const fund =
+          mutualFundMap.get(holding.mutual_fund_id);
+
+        return {
+          ...holding,
+
+          scheme_name:
+            fund?.scheme_name || "Unknown Mutual Fund",
+
+          fund_house:
+            fund?.fund_house || "—",
+
+          category:
+            fund?.category || "—",
+        };
+      });
+
+      setStocks(combinedStocks);
+      setMfs(combinedMFs);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Unable to load portfolio.");
       setStocks([]);
-    } else {
-      setStocks(stockRes.data || []);
-    }
-
-    if (mfRes.error) {
-      setError((old) => old || "MF data error: " + mfRes.error.message);
       setMfs([]);
-    } else {
-      setMfs(mfRes.data || []);
     }
 
     setLoading(false);
   }
 
+  // --------------------------------------------------
+  // PORTFOLIO CALCULATIONS
+  // --------------------------------------------------
+
   const stockInvested = stocks.reduce(
-    (s, x) => s + Number(x.invested_value || 0),
+    (sum, x) =>
+      sum + Number(x.invested_value || 0),
     0
   );
 
   const stockValue = stocks.reduce(
-    (s, x) => s + Number(x.current_value || 0),
+    (sum, x) =>
+      sum + Number(x.current_value || 0),
     0
   );
 
   const mfInvested = mfs.reduce(
-    (s, x) => s + Number(x.invested_value || 0),
+    (sum, x) =>
+      sum + Number(x.invested_value || 0),
     0
   );
 
   const mfValue = mfs.reduce(
-    (s, x) => s + Number(x.current_value || 0),
+    (sum, x) =>
+      sum + Number(x.current_value || 0),
     0
   );
 
-  const invested = stockInvested + mfInvested;
-  const value = stockValue + mfValue;
-  const pnl = value - invested;
-  const pnlPct = invested ? (pnl / invested) * 100 : 0;
+  const invested =
+    stockInvested + mfInvested;
+
+  const value =
+    stockValue + mfValue;
+
+  const pnl =
+    value - invested;
+
+  const pnlPct =
+    invested
+      ? (pnl / invested) * 100
+      : 0;
+
+  // --------------------------------------------------
+  // LOGIN
+  // --------------------------------------------------
 
   if (!session) {
     return <Login />;
@@ -122,8 +324,12 @@ export default function Dashboard() {
   return (
     <main className="shell">
 
+      {/* HEADER */}
+
       <header className="topbar">
+
         <div>
+
           <div className="eyebrow">
             PORTFOLIO AI
           </div>
@@ -135,20 +341,28 @@ export default function Dashboard() {
           <p>
             Simple view. Deeper intelligence behind it.
           </p>
+
         </div>
 
         <button
-          onClick={() => supabase.auth.signOut()}
+          onClick={() =>
+            supabase.auth.signOut()
+          }
         >
           Sign out
         </button>
+
       </header>
+
+      {/* ERROR */}
 
       {error && (
         <div className="error">
           {error}
         </div>
       )}
+
+      {/* TOTAL PORTFOLIO */}
 
       <section className="hero card">
 
@@ -169,7 +383,8 @@ export default function Dashboard() {
                 : "negative"
             }
           >
-            {money(pnl)} ({pnlPct.toFixed(2)}%)
+            {money(pnl)}{" "}
+            ({pnlPct.toFixed(2)}%)
           </div>
 
         </div>
@@ -181,7 +396,10 @@ export default function Dashboard() {
           </span>
 
           <strong>
-            {((value / 90000000) * 100).toFixed(2)}%
+            {(
+              (value / 90000000) * 100
+            ).toFixed(2)}
+            %
           </strong>
 
           <div className="bar">
@@ -201,6 +419,7 @@ export default function Dashboard() {
 
       </section>
 
+      {/* STOCK + MF SUMMARY */}
 
       <section className="grid two">
 
@@ -225,11 +444,13 @@ export default function Dashboard() {
                 : "negative"
             }
           >
-            P/L {money(stockValue - stockInvested)}
+            P/L{" "}
+            {money(
+              stockValue - stockInvested
+            )}
           </div>
 
         </div>
-
 
         <div className="card">
 
@@ -252,13 +473,17 @@ export default function Dashboard() {
                 : "negative"
             }
           >
-            P/L {money(mfValue - mfInvested)}
+            P/L{" "}
+            {money(
+              mfValue - mfInvested
+            )}
           </div>
 
         </div>
 
       </section>
 
+      {/* STOCK HOLDINGS */}
 
       <section className="card">
 
@@ -274,66 +499,115 @@ export default function Dashboard() {
 
         {!loading && (
 
-          <table>
+          <div style={{ overflowX: "auto" }}>
 
-            <thead>
+            <table>
 
-              <tr>
-                <th>Holding</th>
-                <th>Qty</th>
-                <th>Invested</th>
-                <th>Value</th>
-                <th>P/L</th>
-              </tr>
+              <thead>
 
-            </thead>
+                <tr>
 
-            <tbody>
+                  <th>
+                    Company
+                  </th>
 
-              {stocks.map((x) => (
+                  <th>
+                    Symbol
+                  </th>
 
-                <tr key={x.id}>
+                  <th>
+                    Broker
+                  </th>
 
-                  <td>
-                    Stock
-                  </td>
+                  <th>
+                    Qty
+                  </th>
 
-                  <td>
-                    {Number(
-                      x.quantity
-                    ).toLocaleString("en-IN")}
-                  </td>
+                  <th>
+                    Invested
+                  </th>
 
-                  <td>
-                    {money(x.invested_value)}
-                  </td>
+                  <th>
+                    Value
+                  </th>
 
-                  <td>
-                    {money(x.current_value)}
-                  </td>
-
-                  <td
-                    className={
-                      Number(x.unrealized_pnl) >= 0
-                        ? "positive"
-                        : "negative"
-                    }
-                  >
-                    {money(x.unrealized_pnl)}
-                  </td>
+                  <th>
+                    P/L
+                  </th>
 
                 </tr>
 
-              ))}
+              </thead>
 
-            </tbody>
+              <tbody>
 
-          </table>
+                {stocks.map((x) => (
+
+                  <tr key={x.id}>
+
+                    <td>
+                      <strong>
+                        {x.company_name}
+                      </strong>
+                    </td>
+
+                    <td>
+                      {x.symbol}
+                    </td>
+
+                    <td>
+                      {x.broker_name}
+                    </td>
+
+                    <td>
+                      {Number(
+                        x.quantity || 0
+                      ).toLocaleString(
+                        "en-IN"
+                      )}
+                    </td>
+
+                    <td>
+                      {money(
+                        x.invested_value
+                      )}
+                    </td>
+
+                    <td>
+                      {money(
+                        x.current_value
+                      )}
+                    </td>
+
+                    <td
+                      className={
+                        Number(
+                          x.unrealized_pnl
+                        ) >= 0
+                          ? "positive"
+                          : "negative"
+                      }
+                    >
+                      {money(
+                        x.unrealized_pnl
+                      )}
+                    </td>
+
+                  </tr>
+
+                ))}
+
+              </tbody>
+
+            </table>
+
+          </div>
 
         )}
 
       </section>
 
+      {/* MUTUAL FUNDS */}
 
       <section className="card">
 
@@ -349,66 +623,134 @@ export default function Dashboard() {
 
         {!loading && (
 
-          <table>
+          <div style={{ overflowX: "auto" }}>
 
-            <thead>
+            <table>
 
-              <tr>
-                <th>Holding</th>
-                <th>Units</th>
-                <th>Invested</th>
-                <th>Value</th>
-                <th>P/L</th>
-              </tr>
+              <thead>
 
-            </thead>
+                <tr>
 
-            <tbody>
+                  <th>
+                    Fund
+                  </th>
 
-              {mfs.map((x) => (
+                  <th>
+                    Fund House
+                  </th>
 
-                <tr key={x.id}>
+                  <th>
+                    Category
+                  </th>
 
-                  <td>
-                    Mutual Fund
-                  </td>
+                  <th>
+                    Units
+                  </th>
 
-                  <td>
-                    {Number(
-                      x.units
-                    ).toLocaleString(
-                      "en-IN",
-                      {
-                        maximumFractionDigits: 3,
-                      }
-                    )}
-                  </td>
+                  <th>
+                    Avg NAV
+                  </th>
 
-                  <td>
-                    {money(x.invested_value)}
-                  </td>
+                  <th>
+                    Current NAV
+                  </th>
 
-                  <td>
-                    {money(x.current_value)}
-                  </td>
+                  <th>
+                    Invested
+                  </th>
 
-                  <td
-                    className={
-                      Number(x.unrealized_pnl) >= 0
-                        ? "positive"
-                        : "negative"
-                    }
-                  >
-                    {money(x.unrealized_pnl)}
-                  </td>
+                  <th>
+                    Value
+                  </th>
+
+                  <th>
+                    P/L
+                  </th>
 
                 </tr>
 
-              ))}
+              </thead>
 
-            </tbody>
+              <tbody>
 
-          </table>
+                {mfs.map((x) => (
+
+                  <tr key={x.id}>
+
+                    <td>
+                      <strong>
+                        {x.scheme_name}
+                      </strong>
+                    </td>
+
+                    <td>
+                      {x.fund_house}
+                    </td>
+
+                    <td>
+                      {x.category}
+                    </td>
+
+                    <td>
+                      {Number(
+                        x.units || 0
+                      ).toLocaleString(
+                        "en-IN",
+                        {
+                          maximumFractionDigits: 3,
+                        }
+                      )}
+                    </td>
+
+                    <td>
+                      ₹
+                      {Number(
+                        x.average_nav || 0
+                      ).toFixed(2)}
+                    </td>
+
+                    <td>
+                      ₹
+                      {Number(
+                        x.current_nav || 0
+                      ).toFixed(2)}
+                    </td>
+
+                    <td>
+                      {money(
+                        x.invested_value
+                      )}
+                    </td>
+
+                    <td>
+                      {money(
+                        x.current_value
+                      )}
+                    </td>
+
+                    <td
+                      className={
+                        Number(
+                          x.unrealized_pnl
+                        ) >= 0
+                          ? "positive"
+                          : "negative"
+                      }
+                    >
+                      {money(
+                        x.unrealized_pnl
+                      )}
+                    </td>
+
+                  </tr>
+
+                ))}
+
+              </tbody>
+
+            </table>
+
+          </div>
 
         )}
 
@@ -419,11 +761,20 @@ export default function Dashboard() {
 }
 
 
+// ======================================================
+// LOGIN
+// ======================================================
+
 function Login() {
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [email, setEmail] =
+    useState("");
+
+  const [password, setPassword] =
+    useState("");
+
+  const [error, setError] =
+    useState("");
 
   async function login(e) {
 
@@ -440,7 +791,6 @@ function Login() {
     if (error) {
       setError(error.message);
     }
-
   }
 
   return (
@@ -490,13 +840,15 @@ function Login() {
           </div>
         )}
 
-        <button className="primary">
+        <button
+          className="primary"
+          type="submit"
+        >
           Sign in
         </button>
 
       </form>
 
     </main>
-
   );
 }
