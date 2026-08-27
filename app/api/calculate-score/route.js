@@ -1,253 +1,299 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-function num(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+export const dynamic = "force-dynamic";
 
-function scoreGrowth(salesGrowth, profitGrowth) {
-  let score = 0;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  // Sales growth: 10 points
-  if (salesGrowth >= 20) score += 10;
-  else if (salesGrowth >= 15) score += 8;
-  else if (salesGrowth >= 10) score += 6;
-  else if (salesGrowth >= 5) score += 3;
-
-  // Profit growth: 10 points
-  if (profitGrowth >= 20) score += 10;
-  else if (profitGrowth >= 15) score += 8;
-  else if (profitGrowth >= 10) score += 6;
-  else if (profitGrowth >= 5) score += 3;
-
-  return score;
-}
-
-function scoreProfitability(roe, roce) {
-  let score = 0;
-
-  // ROE: 10 points
-  if (roe >= 25) score += 10;
-  else if (roe >= 20) score += 8;
-  else if (roe >= 15) score += 6;
-  else if (roe >= 10) score += 3;
-
-  // ROCE: 10 points
-  if (roce >= 25) score += 10;
-  else if (roce >= 20) score += 8;
-  else if (roce >= 15) score += 6;
-  else if (roce >= 10) score += 3;
-
-  return score;
-}
-
-function scoreDebt(debtToEquity) {
-  if (debtToEquity === null) return 5;
-
-  if (debtToEquity <= 0.1) return 10;
-  if (debtToEquity <= 0.3) return 8;
-  if (debtToEquity <= 0.5) return 6;
-  if (debtToEquity <= 1) return 4;
-  if (debtToEquity <= 2) return 2;
-
-  return 0;
-}
-
-function scoreOwnership(promoter, fii, dii) {
-  let score = 0;
-
-  // Promoter: 5 points
-  if (promoter >= 55) score += 5;
-  else if (promoter >= 50) score += 4;
-  else if (promoter >= 45) score += 3;
-  else if (promoter >= 35) score += 2;
-  else if (promoter >= 25) score += 1;
-
-  // FII: 2.5 points
-  if (fii >= 15) score += 2.5;
-  else if (fii >= 10) score += 2;
-  else if (fii >= 5) score += 1;
-  else if (fii > 0) score += 0.5;
-
-  // DII: 2.5 points
-  if (dii >= 15) score += 2.5;
-  else if (dii >= 10) score += 2;
-  else if (dii >= 5) score += 1;
-  else if (dii > 0) score += 0.5;
-
-  return score;
-}
-
-function scoreCashFlow(operatingCashFlow, netProfit) {
-  if (
-    operatingCashFlow === null ||
-    netProfit === null
-  ) {
-    return 5;
+function getSupabase() {
+  if (!supabaseUrl) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
   }
 
-  if (operatingCashFlow > 0 && netProfit > 0) {
-    const cashConversion =
-      operatingCashFlow / netProfit;
-
-    if (cashConversion >= 1) return 10;
-    if (cashConversion >= 0.75) return 8;
-    if (cashConversion >= 0.5) return 6;
-    if (cashConversion > 0) return 4;
+  if (!supabaseKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   }
 
-  return 0;
+  return createClient(
+    supabaseUrl,
+    supabaseKey,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }
+  );
 }
 
-function scoreValuation(pe, pb) {
-  let score = 0;
+function calculateScore(fundamentals) {
+  let growthScore = 0;
+  let profitabilityScore = 0;
+  let debtScore = 0;
+  let ownershipScore = 0;
+  let cashflowScore = 0;
+  let valuationScore = 0;
+  let riskQualityScore = 0;
 
-  // P/E: 8 points
-  if (pe === null) {
-    score += 4;
-  } else if (pe <= 15) {
-    score += 8;
-  } else if (pe <= 20) {
-    score += 7;
-  } else if (pe <= 25) {
-    score += 6;
-  } else if (pe <= 35) {
-    score += 4;
-  } else if (pe <= 50) {
-    score += 2;
+  const salesGrowth =
+    Number(fundamentals.sales_growth ?? 0);
+
+  const profitGrowth =
+    Number(fundamentals.profit_growth ?? 0);
+
+  const roe =
+    Number(fundamentals.roe ?? 0);
+
+  const roce =
+    Number(fundamentals.roce ?? 0);
+
+  const debtToEquity =
+    Number(fundamentals.debt_to_equity ?? 0);
+
+  const promoter =
+    Number(fundamentals.promoter_holding ?? 0);
+
+  const fii =
+    Number(fundamentals.fii_holding ?? 0);
+
+  const dii =
+    Number(fundamentals.dii_holding ?? 0);
+
+  const operatingCashFlow =
+    Number(fundamentals.operating_cash_flow ?? 0);
+
+  const pe =
+    Number(fundamentals.pe_ratio ?? 0);
+
+  const pb =
+    Number(fundamentals.pb_ratio ?? 0);
+
+  // ==========================================
+  // GROWTH — 20 POINTS
+  // ==========================================
+
+  if (salesGrowth >= 20) {
+    growthScore += 10;
+  } else if (salesGrowth >= 15) {
+    growthScore += 8;
+  } else if (salesGrowth >= 10) {
+    growthScore += 6;
+  } else if (salesGrowth >= 5) {
+    growthScore += 3;
   }
 
-  // P/B: 7 points
-  if (pb === null) {
-    score += 3.5;
-  } else if (pb <= 2) {
-    score += 7;
-  } else if (pb <= 3) {
-    score += 6;
-  } else if (pb <= 5) {
-    score += 4;
-  } else if (pb <= 8) {
-    score += 2;
+  if (profitGrowth >= 20) {
+    growthScore += 10;
+  } else if (profitGrowth >= 15) {
+    growthScore += 8;
+  } else if (profitGrowth >= 10) {
+    growthScore += 6;
+  } else if (profitGrowth >= 5) {
+    growthScore += 3;
   }
 
-  return score;
-}
+  // ==========================================
+  // PROFITABILITY — 20 POINTS
+  // ==========================================
 
-function scoreRisk(
-  roe,
-  roce,
-  debtToEquity,
-  pe,
-  promoter
-) {
-  let score = 0;
-
-  // Strong profitability
-  if (roe >= 20 && roce >= 20) {
-    score += 5;
-  } else if (roe >= 15 && roce >= 15) {
-    score += 4;
-  } else if (roe >= 10 && roce >= 10) {
-    score += 2;
+  if (roe >= 20) {
+    profitabilityScore += 10;
+  } else if (roe >= 15) {
+    profitabilityScore += 8;
+  } else if (roe >= 10) {
+    profitabilityScore += 5;
+  } else if (roe > 0) {
+    profitabilityScore += 2;
   }
 
-  // Low debt
-  if (debtToEquity <= 0.3) {
-    score += 4;
-  } else if (debtToEquity <= 0.75) {
-    score += 3;
-  } else if (debtToEquity <= 1.5) {
-    score += 2;
+  if (roce >= 20) {
+    profitabilityScore += 10;
+  } else if (roce >= 15) {
+    profitabilityScore += 8;
+  } else if (roce >= 10) {
+    profitabilityScore += 5;
+  } else if (roce > 0) {
+    profitabilityScore += 2;
   }
 
-  // Valuation risk
-  if (pe === null) {
-    score += 3;
-  } else if (pe <= 25) {
-    score += 3;
-  } else if (pe <= 40) {
-    score += 2;
-  } else if (pe <= 60) {
-    score += 1;
+  // ==========================================
+  // DEBT — 10 POINTS
+  // ==========================================
+
+  if (debtToEquity <= 0) {
+    debtScore = 10;
+  } else if (debtToEquity <= 0.25) {
+    debtScore = 8;
+  } else if (debtToEquity <= 0.5) {
+    debtScore = 6;
+  } else if (debtToEquity <= 1) {
+    debtScore = 3;
+  } else {
+    debtScore = 0;
   }
 
-  // Promoter alignment
-  if (promoter >= 50) {
-    score += 3;
+  // ==========================================
+  // OWNERSHIP — 10 POINTS
+  // ==========================================
+
+  if (promoter >= 55) {
+    ownershipScore += 5;
+  } else if (promoter >= 50) {
+    ownershipScore += 4;
   } else if (promoter >= 40) {
-    score += 2;
-  } else if (promoter >= 25) {
-    score += 1;
+    ownershipScore += 3;
+  } else if (promoter > 0) {
+    ownershipScore += 1;
   }
 
-  return Math.min(score, 15);
-}
+  if (fii >= 15) {
+    ownershipScore += 3;
+  } else if (fii >= 5) {
+    ownershipScore += 2;
+  } else if (fii > 0) {
+    ownershipScore += 1;
+  }
 
-function getRiskLevel(score) {
-  if (score >= 80) return "LOW";
-  if (score >= 65) return "MODERATE";
-  if (score >= 50) return "HIGH";
+  if (dii >= 10) {
+    ownershipScore += 2;
+  } else if (dii >= 5) {
+    ownershipScore += 1;
+  }
 
-  return "VERY HIGH";
-}
+  ownershipScore =
+    Math.min(ownershipScore, 10);
 
-function getRating(score) {
-  if (score >= 85) return "EXCELLENT";
-  if (score >= 75) return "STRONG";
-  if (score >= 65) return "GOOD";
-  if (score >= 50) return "AVERAGE";
+  // ==========================================
+  // CASH FLOW — 10 POINTS
+  // ==========================================
 
-  return "WEAK";
-}
+  if (operatingCashFlow > 0) {
+    cashflowScore = 5;
+  }
 
-function getAction(score, pe) {
-  /*
-   * This is deliberately conservative.
-   * A strong company can still be expensive.
-   */
+  if (
+    operatingCashFlow >
+    Number(fundamentals.net_profit || 0)
+  ) {
+    cashflowScore += 5;
+  }
 
-  if (score >= 85) {
-    if (pe !== null && pe > 50) {
-      return "HOLD / WAIT FOR BETTER VALUATION";
+  cashflowScore =
+    Math.min(cashflowScore, 10);
+
+  // ==========================================
+  // VALUATION — 15 POINTS
+  // ==========================================
+
+  if (pe > 0) {
+    if (pe <= 15) {
+      valuationScore += 10;
+    } else if (pe <= 25) {
+      valuationScore += 8;
+    } else if (pe <= 35) {
+      valuationScore += 5;
+    } else if (pe <= 50) {
+      valuationScore += 2;
     }
-
-    return "BUY / HOLD";
   }
 
-  if (score >= 75) {
-    if (pe !== null && pe > 50) {
-      return "HOLD";
+  if (pb > 0) {
+    if (pb <= 2) {
+      valuationScore += 5;
+    } else if (pb <= 4) {
+      valuationScore += 4;
+    } else if (pb <= 7) {
+      valuationScore += 2;
     }
-
-    return "BUY / HOLD";
   }
 
-  if (score >= 65) {
-    return "HOLD";
+  valuationScore =
+    Math.min(valuationScore, 15);
+
+  // ==========================================
+  // RISK / QUALITY — 15 POINTS
+  // ==========================================
+
+  if (debtToEquity <= 0.5) {
+    riskQualityScore += 5;
+  } else if (debtToEquity <= 1) {
+    riskQualityScore += 3;
   }
 
-  if (score >= 50) {
-    return "WATCH";
+  if (roe >= 15 && roce >= 15) {
+    riskQualityScore += 5;
+  } else if (roe >= 10 && roce >= 10) {
+    riskQualityScore += 3;
   }
 
-  return "AVOID";
-}
+  if (salesGrowth >= 10 && profitGrowth >= 10) {
+    riskQualityScore += 5;
+  } else if (
+    salesGrowth > 0 &&
+    profitGrowth > 0
+  ) {
+    riskQualityScore += 2;
+  }
 
-function createSummary(
-  score,
-  rating,
-  action,
-  growthScore,
-  profitabilityScore,
-  debtScore,
-  ownershipScore,
-  cashflowScore,
-  valuationScore,
-  riskScore
-) {
-  return (
-    `Portfolio AI Score: ${score}/100. ` +
+  riskQualityScore =
+    Math.min(riskQualityScore, 15);
+
+  // ==========================================
+  // TOTAL
+  // ==========================================
+
+  const totalScore =
+    growthScore +
+    profitabilityScore +
+    debtScore +
+    ownershipScore +
+    cashflowScore +
+    valuationScore +
+    riskQualityScore;
+
+  let rating;
+
+  if (totalScore >= 85) {
+    rating = "EXCELLENT";
+  } else if (totalScore >= 70) {
+    rating = "GOOD";
+  } else if (totalScore >= 55) {
+    rating = "AVERAGE";
+  } else {
+    rating = "WEAK";
+  }
+
+  let riskLevel;
+
+  if (
+    debtToEquity <= 0.5 &&
+    roe >= 15 &&
+    roce >= 15
+  ) {
+    riskLevel = "LOW";
+  } else if (
+    debtToEquity <= 1
+  ) {
+    riskLevel = "MODERATE";
+  } else {
+    riskLevel = "HIGH";
+  }
+
+  let action;
+
+  if (totalScore >= 85) {
+    action = "BUY";
+  } else if (totalScore >= 70) {
+    action = "HOLD";
+  } else if (totalScore >= 55) {
+    action = "WATCH";
+  } else {
+    action = "REDUCE";
+  }
+
+  const aiSummary =
+    `Portfolio AI Score: ${totalScore}/100. ` +
     `Rating: ${rating}. ` +
     `Action: ${action}. ` +
     `Growth ${growthScore}/20, ` +
@@ -256,98 +302,97 @@ function createSummary(
     `Ownership ${ownershipScore}/10, ` +
     `Cash Flow ${cashflowScore}/10, ` +
     `Valuation ${valuationScore}/15, ` +
-    `Risk/Quality ${riskScore}/15.`
-  );
+    `Risk/Quality ${riskQualityScore}/15.`;
+
+  return {
+    totalScore,
+    growthScore,
+    profitabilityScore,
+    debtScore,
+    ownershipScore,
+    cashflowScore,
+    valuationScore,
+    riskQualityScore,
+    riskLevel,
+    rating,
+    action,
+    aiSummary,
+  };
 }
 
-export async function GET(request) {
+export async function GET() {
   try {
-    // =====================================================
-    // 1. ENVIRONMENT
-    // =====================================================
+    const supabase = getSupabase();
 
-    const supabaseUrl =
-      process.env.NEXT_PUBLIC_SUPABASE_URL;
+    // ==========================================
+    // 1. GET ALL STOCK HOLDINGS
+    // ==========================================
 
-    const supabaseSecretKey =
-      process.env.SUPABASE_SECRET_KEY;
+    const {
+      data: holdings,
+      error: holdingsError,
+    } = await supabase
+      .from("holdings")
+      .select(
+        "id, user_id, instrument_id, quantity, invested_value, current_value"
+      );
 
-    if (!supabaseUrl) {
+    if (holdingsError) {
       return NextResponse.json({
         success: false,
-        step: "configuration",
-        error:
-          "NEXT_PUBLIC_SUPABASE_URL is missing",
+        step: "holdings",
+        error: holdingsError.message,
       });
     }
 
-    if (!supabaseSecretKey) {
+    if (!holdings || holdings.length === 0) {
       return NextResponse.json({
         success: false,
-        step: "configuration",
-        error:
-          "SUPABASE_SECRET_KEY is missing",
+        step: "holdings",
+        error: "No stock holdings found.",
       });
     }
 
-    const supabase = createClient(
-      supabaseUrl,
-      supabaseSecretKey
-    );
+    // ==========================================
+    // 2. GET INSTRUMENTS
+    // ==========================================
 
-    // =====================================================
-    // 2. GET SYMBOL
-    // =====================================================
-
-    const { searchParams } =
-      new URL(request.url);
-
-    const symbol =
-      searchParams.get("symbol") ||
-      "INE263A01024";
-
-    // =====================================================
-    // 3. FIND INSTRUMENT
-    // =====================================================
+    const instrumentIds = [
+      ...new Set(
+        holdings
+          .map((h) => h.instrument_id)
+          .filter(Boolean)
+      ),
+    ];
 
     const {
       data: instruments,
-      error: instrumentError,
+      error: instrumentsError,
     } = await supabase
       .from("instruments")
       .select(
         "id, symbol, company_name"
       )
-      .eq("symbol", symbol)
-      .limit(1);
+      .in("id", instrumentIds);
 
-    if (instrumentError) {
+    if (instrumentsError) {
       return NextResponse.json({
         success: false,
-        step: "find_instrument",
-        error:
-          instrumentError.message,
+        step: "instruments",
+        error: instrumentsError.message,
       });
     }
 
-    if (
-      !instruments ||
-      instruments.length === 0
-    ) {
-      return NextResponse.json({
-        success: false,
-        step: "find_instrument",
-        error:
-          `Instrument not found: ${symbol}`,
-      });
-    }
+    const instrumentMap = new Map(
+      (instruments || []).map((i) => [
+        i.id,
+        i,
+      ])
+    );
 
-    const instrument =
-      instruments[0];
-
-    // =====================================================
-    // 4. GET FUNDAMENTALS
-    // =====================================================
+    // ==========================================
+    // 3. GET FUNDAMENTALS
+    // ==========================================
 
     const {
       data: fundamentals,
@@ -355,269 +400,170 @@ export async function GET(request) {
     } = await supabase
       .from("fundamentals")
       .select("*")
-      .eq(
-        "instrument_id",
-        instrument.id
-      )
-      .limit(1);
+      .in("instrument_id", instrumentIds);
 
     if (fundamentalsError) {
       return NextResponse.json({
         success: false,
-        step: "get_fundamentals",
-        error:
-          fundamentalsError.message,
+        step: "fundamentals",
+        error: fundamentalsError.message,
       });
     }
 
-    if (
-      !fundamentals ||
-      fundamentals.length === 0
-    ) {
-      return NextResponse.json({
-        success: false,
-        step: "get_fundamentals",
-        error:
-          `No fundamentals found for ${instrument.company_name}. Run sync-fundamentals first.`,
-      });
+    const fundamentalsMap = new Map();
+
+    for (const row of fundamentals || []) {
+      const existing =
+        fundamentalsMap.get(
+          row.instrument_id
+        );
+
+      if (
+        !existing ||
+        new Date(
+          row.updated_at || 0
+        ) >
+          new Date(
+            existing.updated_at || 0
+          )
+      ) {
+        fundamentalsMap.set(
+          row.instrument_id,
+          row
+        );
+      }
     }
 
-    const f =
-      fundamentals[0];
+    // ==========================================
+    // 4. SCORE EACH HOLDING
+    // ==========================================
 
-    // =====================================================
-    // 5. NORMALIZE DATA
-    // =====================================================
+    const results = [];
+    const skipped = [];
 
-    const salesGrowth =
-      num(f.sales_growth) ?? 0;
+    for (const holding of holdings) {
+      const instrument =
+        instrumentMap.get(
+          holding.instrument_id
+        );
 
-    const profitGrowth =
-      num(f.profit_growth) ?? 0;
+      if (!instrument) {
+        skipped.push({
+          instrument_id:
+            holding.instrument_id,
+          reason:
+            "Instrument not found.",
+        });
 
-    const roe =
-      num(f.roe) ?? 0;
+        continue;
+      }
 
-    const roce =
-      num(f.roce) ?? 0;
+      const fundamental =
+        fundamentalsMap.get(
+          holding.instrument_id
+        );
 
-    const debtToEquity =
-      num(f.debt_to_equity) ?? 0;
+      if (!fundamental) {
+        skipped.push({
+          symbol:
+            instrument.symbol,
+          company_name:
+            instrument.company_name,
+          reason:
+            "Fundamentals not available.",
+        });
 
-    const promoter =
-      num(f.promoter_holding) ?? 0;
+        continue;
+      }
 
-    const fii =
-      num(f.fii_holding) ?? 0;
+      const score =
+        calculateScore(
+          fundamental
+        );
 
-    const dii =
-      num(f.dii_holding) ?? 0;
+      // ========================================
+      // 5. SAVE SCORE
+      // ========================================
 
-    const operatingCashFlow =
-      num(f.operating_cash_flow);
+      const record = {
+        user_id:
+          holding.user_id || null,
 
-    const pe =
-      num(f.pe_ratio);
+        instrument_id:
+          holding.instrument_id,
 
-    const pb =
-      num(f.pb_ratio);
+        total_score:
+          score.totalScore,
 
-    // =====================================================
-    // 6. GET NET PROFIT FROM FUNDAMENTALS API DATA
-    // =====================================================
+        growth_score:
+          score.growthScore,
 
-    /*
-     * The current fundamentals table does not store
-     * net profit yet.
-     *
-     * Therefore cash-flow scoring uses a conservative
-     * neutral score until net profit is added.
-     */
+        profitability_score:
+          score.profitabilityScore,
 
-    const netProfit = null;
+        debt_score:
+          score.debtScore,
 
-    // =====================================================
-    // 7. CALCULATE CATEGORY SCORES
-    // =====================================================
+        ownership_score:
+          score.ownershipScore,
 
-    const growthScore =
-      scoreGrowth(
-        salesGrowth,
-        profitGrowth
-      );
+        cashflow_score:
+          score.cashflowScore,
 
-    const profitabilityScore =
-      scoreProfitability(
-        roe,
-        roce
-      );
+        valuation_score:
+          score.valuationScore,
 
-    const debtScore =
-      scoreDebt(
-        debtToEquity
-      );
+        risk_score:
+          score.riskQualityScore,
 
-    const ownershipScore =
-      scoreOwnership(
-        promoter,
-        fii,
-        dii
-      );
+        risk_level:
+          score.riskLevel,
 
-    const cashflowScore =
-      scoreCashFlow(
-        operatingCashFlow,
-        netProfit
-      );
+        rating:
+          score.rating,
 
-    const valuationScore =
-      scoreValuation(
-        pe,
-        pb
-      );
+        action:
+          score.action,
 
-    const riskScore =
-      scoreRisk(
-        roe,
-        roce,
-        debtToEquity,
-        pe,
-        promoter
-      );
+        ai_summary:
+          score.aiSummary,
 
-    // =====================================================
-    // 8. TOTAL SCORE
-    // =====================================================
+        calculated_at:
+          new Date().toISOString(),
 
-    const totalScore =
-      Number(
-        (
-          growthScore +
-          profitabilityScore +
-          debtScore +
-          ownershipScore +
-          cashflowScore +
-          valuationScore +
-          riskScore
-        ).toFixed(2)
-      );
+        score_date:
+          new Date().toISOString(),
+      };
 
-    // =====================================================
-    // 9. RATING / RISK / ACTION
-    // =====================================================
+      const {
+        data: saved,
+        error: saveError,
+      } = await supabase
+        .from("ai_scores")
+        .upsert(
+          record,
+          {
+            onConflict:
+              "instrument_id,user_id",
+          }
+        )
+        .select()
+        .single();
 
-    const rating =
-      getRating(totalScore);
+      if (saveError) {
+        skipped.push({
+          symbol:
+            instrument.symbol,
+          company_name:
+            instrument.company_name,
+          reason:
+            saveError.message,
+        });
 
-    const riskLevel =
-      getRiskLevel(totalScore);
+        continue;
+      }
 
-    const action =
-      getAction(
-        totalScore,
-        pe
-      );
-
-    // =====================================================
-    // 10. SUMMARY
-    // =====================================================
-
-    const aiSummary =
-      createSummary(
-        totalScore,
-        rating,
-        action,
-        growthScore,
-        profitabilityScore,
-        debtScore,
-        ownershipScore,
-        cashflowScore,
-        valuationScore,
-        riskScore
-      );
-
-    // =====================================================
-    // 11. SAVE SCORE
-    // =====================================================
-
-    const scoreRecord = {
-      instrument_id:
-        instrument.id,
-
-      total_score:
-        totalScore,
-
-      growth_score:
-        growthScore,
-
-      profitability_score:
-        profitabilityScore,
-
-      debt_score:
-        debtScore,
-
-      ownership_score:
-        ownershipScore,
-
-      cashflow_score:
-        cashflowScore,
-
-      valuation_score:
-        valuationScore,
-
-      risk_level:
-        riskLevel,
-
-      rating:
-        rating,
-
-      action:
-        action,
-
-      ai_summary:
-        aiSummary,
-
-      calculated_at:
-        new Date().toISOString(),
-    };
-
-    const {
-      data: savedScore,
-      error: saveError,
-    } = await supabase
-      .from("ai_scores")
-      .upsert(
-        scoreRecord,
-        {
-          onConflict:
-            "instrument_id",
-        }
-      )
-      .select()
-      .single();
-
-    if (saveError) {
-      return NextResponse.json({
-        success: false,
-        step: "save_score",
-        error:
-          saveError.message,
-        record_attempted:
-          scoreRecord,
-      });
-    }
-
-    // =====================================================
-    // 12. SUCCESS
-    // =====================================================
-
-    return NextResponse.json({
-      success: true,
-
-      message:
-        `${instrument.company_name} AI score calculated successfully.`,
-
-      stock: {
+      results.push({
         symbol:
           instrument.symbol,
 
@@ -626,104 +572,96 @@ export async function GET(request) {
 
         instrument_id:
           instrument.id,
-      },
 
-      score: {
-        total:
-          totalScore,
+        score:
+          score.totalScore,
 
         rating:
-          rating,
+          score.rating,
 
         risk_level:
-          riskLevel,
+          score.riskLevel,
 
         action:
-          action,
+          score.action,
+
+        saved_id:
+          saved?.id || null,
+      });
+    }
+
+    // ==========================================
+    // 6. PORTFOLIO SUMMARY
+    // ==========================================
+
+    const scores =
+      results.map((x) =>
+        Number(x.score)
+      );
+
+    const averageScore =
+      scores.length > 0
+        ? Math.round(
+            scores.reduce(
+              (a, b) => a + b,
+              0
+            ) / scores.length
+          )
+        : null;
+
+    const actionCounts = {};
+
+    for (const item of results) {
+      actionCounts[item.action] =
+        (actionCounts[item.action] || 0) +
+        1;
+    }
+
+    return NextResponse.json({
+      success: true,
+
+      message:
+        "Portfolio AI scoring completed.",
+
+      summary: {
+        total_holdings:
+          holdings.length,
+
+        scored:
+          results.length,
+
+        skipped:
+          skipped.length,
+
+        average_score:
+          averageScore,
+
+        actions:
+          actionCounts,
       },
 
-      breakdown: {
-        growth:
-          {
-            score:
-              growthScore,
-            max:
-              20,
-          },
+      results,
 
-        profitability:
-          {
-            score:
-              profitabilityScore,
-            max:
-              20,
-          },
-
-        debt:
-          {
-            score:
-              debtScore,
-            max:
-              10,
-          },
-
-        ownership:
-          {
-            score:
-              ownershipScore,
-            max:
-              10,
-          },
-
-        cash_flow:
-          {
-            score:
-              cashflowScore,
-            max:
-              10,
-          },
-
-        valuation:
-          {
-            score:
-              valuationScore,
-            max:
-              15,
-          },
-
-        risk_quality:
-          {
-            score:
-              riskScore,
-            max:
-              15,
-          },
-      },
-
-      summary:
-        aiSummary,
-
-      saved_to:
-        "ai_scores",
-
-      saved_record:
-        savedScore,
+      skipped,
     });
   } catch (error) {
     console.error(
-      "AI score error:",
+      "Portfolio scoring error:",
       error
     );
 
     return NextResponse.json(
       {
         success: false,
-        step: "unexpected",
+        step: "server",
         error:
-          error?.message ||
-          "Unknown error",
+          error instanceof Error
+            ? error.message
+            : String(error),
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
