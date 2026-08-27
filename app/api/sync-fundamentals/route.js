@@ -8,9 +8,9 @@ function numberOrNull(value) {
     return null;
   }
 
-  const number = Number(value);
+  const n = Number(value);
 
-  return Number.isFinite(number) ? number : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 function calculateGrowth(current, previous) {
@@ -73,7 +73,7 @@ async function callBharatStock(endpoint, apiKey) {
 export async function GET(request) {
   try {
     // =====================================================
-    // 1. CHECK ENVIRONMENT VARIABLES
+    // 1. ENVIRONMENT VARIABLES
     // =====================================================
 
     const supabaseUrl =
@@ -86,43 +86,34 @@ export async function GET(request) {
       process.env.BHARATSTOCK_API_KEY;
 
     if (!supabaseUrl) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "configuration",
-          error:
-            "NEXT_PUBLIC_SUPABASE_URL is missing",
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "configuration",
+        error:
+          "NEXT_PUBLIC_SUPABASE_URL is missing",
+      });
     }
 
     if (!supabaseSecretKey) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "configuration",
-          error:
-            "SUPABASE_SECRET_KEY is missing",
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "configuration",
+        error:
+          "SUPABASE_SECRET_KEY is missing",
+      });
     }
 
     if (!bharatStockApiKey) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "configuration",
-          error:
-            "BHARATSTOCK_API_KEY is missing",
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "configuration",
+        error:
+          "BHARATSTOCK_API_KEY is missing",
+      });
     }
 
     // =====================================================
-    // 2. CREATE SUPABASE CLIENT
+    // 2. SUPABASE CLIENT
     // =====================================================
 
     const supabase = createClient(
@@ -131,18 +122,11 @@ export async function GET(request) {
     );
 
     // =====================================================
-    // 3. GET REQUESTED SYMBOL
+    // 3. SYMBOL
     // =====================================================
 
     const { searchParams } =
       new URL(request.url);
-
-    /*
-      We are using the ISIN stored in your instruments table.
-
-      BEL:
-      INE263A01024
-    */
 
     const requestedSymbol =
       searchParams.get("symbol") ||
@@ -167,65 +151,52 @@ export async function GET(request) {
       .limit(1);
 
     if (instrumentError) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "find_instrument",
-          error:
-            instrumentError.message,
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "find_instrument",
+        error:
+          instrumentError.message,
+      });
     }
 
     if (
       !instruments ||
       instruments.length === 0
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "find_instrument",
-          error:
-            `No instrument found for ${requestedSymbol}`,
-        },
-        { status: 404 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "find_instrument",
+        error:
+          `No instrument found for ${requestedSymbol}`,
+      });
     }
 
     const instrument =
       instruments[0];
 
     // =====================================================
-    // 5. BHARATSTOCK FINANCIALS
+    // 5. FINANCIALS
     // =====================================================
-
-    /*
-      IMPORTANT:
-
-      BharatStock returns:
-
-      {
-        "data": [
-          financial record,
-          financial record
-        ]
-      }
-
-      Therefore we use:
-
-      financialResponse.data
-
-      NOT:
-
-      financialResponse.data.data
-    */
 
     const financialResponse =
       await callBharatStock(
         `${requestedSymbol}/financials?period_type=annual&page=1&page_size=5`,
         bharatStockApiKey
       );
+
+    /*
+     * Actual successful BharatStock financial response:
+
+     {
+       "data": [
+         {...},
+         {...}
+       ]
+     }
+
+     Therefore:
+       financialResponse.data
+     */
 
     const financialData =
       financialResponse?.data;
@@ -236,33 +207,17 @@ export async function GET(request) {
       ) ||
       financialData.length === 0
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "financials",
-          error:
-            "BharatStock returned no annual financial data.",
-          debug: {
-            responseType:
-              typeof financialResponse,
-
-            responseKeys:
-              financialResponse &&
-              typeof financialResponse ===
-                "object"
-                ? Object.keys(
-                    financialResponse
-                  )
-                : [],
-          },
+      return NextResponse.json({
+        success: false,
+        step: "financials",
+        error:
+          "BharatStock returned no annual financial data.",
+        debug: {
+          response:
+            financialResponse,
         },
-        { status: 404 }
-      );
+      });
     }
-
-    // =====================================================
-    // 6. SORT FINANCIAL YEARS
-    // =====================================================
 
     const annuals =
       financialData
@@ -288,19 +243,16 @@ export async function GET(request) {
       annuals[1] || null;
 
     if (!latest) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "financials",
-          error:
-            "Could not identify the latest financial period.",
-        },
-        { status: 404 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "financials",
+        error:
+          "Could not identify latest financial period.",
+      });
     }
 
     // =====================================================
-    // 7. CALCULATE SALES GROWTH
+    // 6. FINANCIAL CALCULATIONS
     // =====================================================
 
     const salesGrowth =
@@ -311,10 +263,6 @@ export async function GET(request) {
           )
         : null;
 
-    // =====================================================
-    // 8. CALCULATE PROFIT GROWTH
-    // =====================================================
-
     const profitGrowth =
       previous
         ? calculateGrowth(
@@ -322,10 +270,6 @@ export async function GET(request) {
             previous.net_profit
           )
         : null;
-
-    // =====================================================
-    // 9. CALCULATE ROE
-    // =====================================================
 
     const netProfit =
       numberOrNull(
@@ -353,10 +297,6 @@ export async function GET(request) {
           ).toFixed(2)
         );
     }
-
-    // =====================================================
-    // 10. CALCULATE ROCE
-    // =====================================================
 
     const operatingProfit =
       numberOrNull(
@@ -398,21 +338,10 @@ export async function GET(request) {
       }
     }
 
-    // =====================================================
-    // 11. DEBT / EQUITY
-    // =====================================================
-
     let debtToEquity =
       numberOrNull(
         latest.debt_equity_ratio
       );
-
-    /*
-      BEL has zero borrowings.
-
-      If BharatStock gives null,
-      calculate it ourselves.
-    */
 
     if (
       debtToEquity === null
@@ -445,17 +374,13 @@ export async function GET(request) {
       }
     }
 
-    // =====================================================
-    // 12. OPERATING CASH FLOW
-    // =====================================================
-
     const operatingCashFlow =
       numberOrNull(
         latest.cash_flow_operating
       );
 
     // =====================================================
-    // 13. SHAREHOLDING
+    // 7. SHAREHOLDING
     // =====================================================
 
     const shareholdingResponse =
@@ -464,8 +389,49 @@ export async function GET(request) {
         bharatStockApiKey
       );
 
-    const shareholdingData =
+    /*
+     * IMPORTANT:
+
+     * Successful test response was:
+
+     * {
+     *   "data": {
+     *     "data": [
+     *       {
+     *         "promoter_pct": 51.14,
+     *         "fii_pct": 18.02,
+     *         "dii_pct": 21.02
+     *       }
+     *     ]
+     *   }
+     * }
+
+     * So we use:
+     *
+     * shareholdingResponse.data.data
+     */
+
+    let shareholdingData =
       shareholdingResponse?.data?.data;
+
+    /*
+     * Extra safety:
+     *
+     * If BharatStock ever returns the array
+     * directly under data, also support that.
+     */
+
+    if (
+      !Array.isArray(
+        shareholdingData
+      ) &&
+      Array.isArray(
+        shareholdingResponse?.data
+      )
+    ) {
+      shareholdingData =
+        shareholdingResponse.data;
+    }
 
     if (
       !Array.isArray(
@@ -473,22 +439,23 @@ export async function GET(request) {
       ) ||
       shareholdingData.length === 0
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "shareholding",
-          error:
-            "BharatStock returned no shareholding data.",
+      return NextResponse.json({
+        success: false,
+        step: "shareholding",
+        error:
+          "BharatStock returned no shareholding data.",
+        debug: {
+          response:
+            shareholdingResponse,
         },
-        { status: 404 }
-      );
+      });
     }
 
     const latestShareholding =
       shareholdingData[0];
 
     // =====================================================
-    // 14. RATIOS / VALUATION
+    // 8. RATIOS
     // =====================================================
 
     const ratioResponse =
@@ -505,26 +472,26 @@ export async function GET(request) {
       typeof ratios !==
         "object"
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "ratios",
-          error:
-            "BharatStock returned no ratio data.",
+      return NextResponse.json({
+        success: false,
+        step: "ratios",
+        error:
+          "BharatStock returned no ratio data.",
+        debug: {
+          response:
+            ratioResponse,
         },
-        { status: 404 }
-      );
+      });
     }
 
     // =====================================================
-    // 15. CREATE FUNDAMENTALS RECORD
+    // 9. BUILD RECORD
     // =====================================================
 
     const record = {
       instrument_id:
         instrument.id,
 
-      // Financials
       sales_growth:
         salesGrowth,
 
@@ -546,13 +513,6 @@ export async function GET(request) {
       debt_to_equity:
         debtToEquity,
 
-      operating_cash_flow:
-        operatingCashFlow,
-
-      free_cash_flow:
-        null,
-
-      // Shareholding
       promoter_holding:
         numberOrNull(
           latestShareholding.promoter_pct
@@ -571,7 +531,12 @@ export async function GET(request) {
           latestShareholding.dii_pct
         ),
 
-      // Period
+      operating_cash_flow:
+        operatingCashFlow,
+
+      free_cash_flow:
+        null,
+
       financial_year:
         latest.fiscal_year ||
         null,
@@ -580,14 +545,12 @@ export async function GET(request) {
         latest.quarter ||
         null,
 
-      // Source
       source:
         "BharatStock",
 
       updated_at:
         new Date().toISOString(),
 
-      // Valuation
       market_cap:
         numberOrNull(
           ratios.market_cap
@@ -634,7 +597,7 @@ export async function GET(request) {
     };
 
     // =====================================================
-    // 16. SAVE TO SUPABASE
+    // 10. SAVE
     // =====================================================
 
     const {
@@ -653,21 +616,18 @@ export async function GET(request) {
       .single();
 
     if (saveError) {
-      return NextResponse.json(
-        {
-          success: false,
-          step: "save_fundamentals",
-          error:
-            saveError.message,
-          record_attempted:
-            record,
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        success: false,
+        step: "save_fundamentals",
+        error:
+          saveError.message,
+        record_attempted:
+          record,
+      });
     }
 
     // =====================================================
-    // 17. SUCCESS
+    // 11. SUCCESS
     // =====================================================
 
     return NextResponse.json({
