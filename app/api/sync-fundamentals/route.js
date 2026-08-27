@@ -8,36 +8,44 @@ function numberOrNull(value) {
     return null;
   }
 
-  const n = Number(value);
+  const number = Number(value);
 
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(number) ? number : null;
 }
 
-function growth(current, previous) {
+function calculateGrowth(current, previous) {
+  const currentValue = numberOrNull(current);
+  const previousValue = numberOrNull(previous);
+
   if (
-    current === null ||
-    current === undefined ||
-    previous === null ||
-    previous === undefined ||
-    Number(previous) === 0
+    currentValue === null ||
+    previousValue === null ||
+    previousValue === 0
   ) {
     return null;
   }
 
   return Number(
-    (((Number(current) - Number(previous)) / Number(previous)) * 100).toFixed(2)
+    (
+      ((currentValue - previousValue) /
+        Math.abs(previousValue)) *
+      100
+    ).toFixed(2)
   );
 }
 
-async function bharatStockFetch(path, apiKey) {
-  const response = await fetch(`${BASE_URL}/${path}`, {
-    method: "GET",
-    headers: {
-      "X-API-Key": apiKey,
-      Accept: "application/json",
-    },
-    cache: "no-store",
-  });
+async function callBharatStock(endpoint, apiKey) {
+  const response = await fetch(
+    `${BASE_URL}/${endpoint}`,
+    {
+      method: "GET",
+      headers: {
+        "X-API-Key": apiKey,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    }
+  );
 
   const text = await response.text();
 
@@ -52,7 +60,9 @@ async function bharatStockFetch(path, apiKey) {
   if (!response.ok) {
     throw new Error(
       `BharatStock ${response.status}: ${
-        typeof data === "string" ? data : JSON.stringify(data)
+        typeof data === "string"
+          ? data
+          : JSON.stringify(data)
       }`
     );
   }
@@ -62,20 +72,26 @@ async function bharatStockFetch(path, apiKey) {
 
 export async function GET(request) {
   try {
-    // ---------------------------------------------------------
-    // 0. ENVIRONMENT VARIABLES
-    // ---------------------------------------------------------
+    // =====================================================
+    // 1. CHECK ENVIRONMENT VARIABLES
+    // =====================================================
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
-    const bharatStockApiKey = process.env.BHARATSTOCK_API_KEY;
+    const supabaseUrl =
+      process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    const supabaseSecretKey =
+      process.env.SUPABASE_SECRET_KEY;
+
+    const bharatStockApiKey =
+      process.env.BHARATSTOCK_API_KEY;
 
     if (!supabaseUrl) {
       return NextResponse.json(
         {
           success: false,
           step: "configuration",
-          error: "NEXT_PUBLIC_SUPABASE_URL is missing",
+          error:
+            "NEXT_PUBLIC_SUPABASE_URL is missing",
         },
         { status: 500 }
       );
@@ -86,7 +102,8 @@ export async function GET(request) {
         {
           success: false,
           step: "configuration",
-          error: "SUPABASE_SECRET_KEY is missing",
+          error:
+            "SUPABASE_SECRET_KEY is missing",
         },
         { status: 500 }
       );
@@ -97,315 +114,561 @@ export async function GET(request) {
         {
           success: false,
           step: "configuration",
-          error: "BHARATSTOCK_API_KEY is missing",
+          error:
+            "BHARATSTOCK_API_KEY is missing",
         },
         { status: 500 }
       );
     }
 
-    // Create Supabase client at runtime.
-    // This prevents Next.js build-time failure.
+    // =====================================================
+    // 2. CREATE SUPABASE CLIENT
+    // =====================================================
+
     const supabase = createClient(
       supabaseUrl,
       supabaseSecretKey
     );
 
-    // ---------------------------------------------------------
-    // 1. GET SYMBOL
-    // ---------------------------------------------------------
+    // =====================================================
+    // 3. GET REQUESTED SYMBOL
+    // =====================================================
 
-    const { searchParams } = new URL(request.url);
+    const { searchParams } =
+      new URL(request.url);
+
+    /*
+      We are using the ISIN stored in your instruments table.
+
+      BEL:
+      INE263A01024
+    */
 
     const requestedSymbol =
-      searchParams.get("symbol") || "INE263A01024";
+      searchParams.get("symbol") ||
+      "INE263A01024";
 
-    // ---------------------------------------------------------
-    // 2. FIND INSTRUMENT
-    // ---------------------------------------------------------
+    // =====================================================
+    // 4. FIND INSTRUMENT
+    // =====================================================
 
-    const { data: instruments, error: instrumentError } =
-      await supabase
-        .from("instruments")
-        .select("id, symbol, company_name")
-        .eq("symbol", requestedSymbol)
-        .limit(1);
+    const {
+      data: instruments,
+      error: instrumentError,
+    } = await supabase
+      .from("instruments")
+      .select(
+        "id, symbol, company_name"
+      )
+      .eq(
+        "symbol",
+        requestedSymbol
+      )
+      .limit(1);
 
     if (instrumentError) {
-      return NextResponse.json({
-        success: false,
-        step: "find_instrument",
-        error: instrumentError.message,
-      });
+      return NextResponse.json(
+        {
+          success: false,
+          step: "find_instrument",
+          error:
+            instrumentError.message,
+        },
+        { status: 500 }
+      );
     }
 
-    if (!instruments || instruments.length === 0) {
-      return NextResponse.json({
-        success: false,
-        step: "find_instrument",
-        error: `Instrument not found for symbol ${requestedSymbol}`,
-      });
+    if (
+      !instruments ||
+      instruments.length === 0
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          step: "find_instrument",
+          error:
+            `No instrument found for ${requestedSymbol}`,
+        },
+        { status: 404 }
+      );
     }
 
-    const instrument = instruments[0];
+    const instrument =
+      instruments[0];
 
-    // ---------------------------------------------------------
-    // 3. FINANCIALS
-    // ---------------------------------------------------------
+    // =====================================================
+    // 5. BHARATSTOCK FINANCIALS
+    // =====================================================
 
-    const financialResponse = await bharatStockFetch(
-      `${requestedSymbol}/financials?period_type=annual&page=1&page_size=5`,
-      bharatStockApiKey
-    );
+    /*
+      IMPORTANT:
 
-    const financialData = financialResponse?.data?.data;
+      BharatStock returns:
 
-    if (!Array.isArray(financialData) || financialData.length === 0) {
-      return NextResponse.json({
-        success: false,
-        step: "financials",
-        error: "BharatStock returned no annual financial data.",
-      });
-    }
+      {
+        "data": [
+          financial record,
+          financial record
+        ]
+      }
 
-    const annuals = financialData
-      .filter((item) => item?.period_end_date)
-      .sort(
-        (a, b) =>
-          new Date(b.period_end_date) -
-          new Date(a.period_end_date)
+      Therefore we use:
+
+      financialResponse.data
+
+      NOT:
+
+      financialResponse.data.data
+    */
+
+    const financialResponse =
+      await callBharatStock(
+        `${requestedSymbol}/financials?period_type=annual&page=1&page_size=5`,
+        bharatStockApiKey
       );
 
-    const latest = annuals[0];
-    const previous = annuals[1];
+    const financialData =
+      financialResponse?.data;
 
-    if (!latest) {
-      return NextResponse.json({
-        success: false,
-        step: "financials",
-        error: "Latest financial year could not be determined.",
-      });
+    if (
+      !Array.isArray(
+        financialData
+      ) ||
+      financialData.length === 0
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          step: "financials",
+          error:
+            "BharatStock returned no annual financial data.",
+          debug: {
+            responseType:
+              typeof financialResponse,
+
+            responseKeys:
+              financialResponse &&
+              typeof financialResponse ===
+                "object"
+                ? Object.keys(
+                    financialResponse
+                  )
+                : [],
+          },
+        },
+        { status: 404 }
+      );
     }
 
-    // ---------------------------------------------------------
-    // 4. CALCULATE FINANCIAL FUNDAMENTALS
-    // ---------------------------------------------------------
+    // =====================================================
+    // 6. SORT FINANCIAL YEARS
+    // =====================================================
 
-    const salesGrowth = previous
-      ? growth(latest.revenue, previous.revenue)
-      : null;
+    const annuals =
+      financialData
+        .filter(
+          (item) =>
+            item &&
+            item.period_end_date
+        )
+        .sort(
+          (a, b) =>
+            new Date(
+              b.period_end_date
+            ) -
+            new Date(
+              a.period_end_date
+            )
+        );
 
-    const profitGrowth = previous
-      ? growth(latest.net_profit, previous.net_profit)
-      : null;
+    const latest =
+      annuals[0];
 
-    const totalEquity = numberOrNull(latest.total_equity);
-    const netProfit = numberOrNull(latest.net_profit);
+    const previous =
+      annuals[1] || null;
 
-    const calculatedRoe =
-      totalEquity !== null &&
-      totalEquity !== 0 &&
-      netProfit !== null
-        ? Number(
-            ((netProfit / totalEquity) * 100).toFixed(2)
+    if (!latest) {
+      return NextResponse.json(
+        {
+          success: false,
+          step: "financials",
+          error:
+            "Could not identify the latest financial period.",
+        },
+        { status: 404 }
+      );
+    }
+
+    // =====================================================
+    // 7. CALCULATE SALES GROWTH
+    // =====================================================
+
+    const salesGrowth =
+      previous
+        ? calculateGrowth(
+            latest.revenue,
+            previous.revenue
           )
         : null;
 
-    const totalAssets = numberOrNull(latest.total_assets);
+    // =====================================================
+    // 8. CALCULATE PROFIT GROWTH
+    // =====================================================
 
-    const currentLiabilities = numberOrNull(
-      latest.current_liabilities
-    );
+    const profitGrowth =
+      previous
+        ? calculateGrowth(
+            latest.net_profit,
+            previous.net_profit
+          )
+        : null;
 
-    const operatingProfit = numberOrNull(
-      latest.operating_profit
-    );
+    // =====================================================
+    // 9. CALCULATE ROE
+    // =====================================================
 
-    const capitalEmployed =
+    const netProfit =
+      numberOrNull(
+        latest.net_profit
+      );
+
+    const totalEquity =
+      numberOrNull(
+        latest.total_equity
+      );
+
+    let calculatedROE = null;
+
+    if (
+      netProfit !== null &&
+      totalEquity !== null &&
+      totalEquity !== 0
+    ) {
+      calculatedROE =
+        Number(
+          (
+            (netProfit /
+              totalEquity) *
+            100
+          ).toFixed(2)
+        );
+    }
+
+    // =====================================================
+    // 10. CALCULATE ROCE
+    // =====================================================
+
+    const operatingProfit =
+      numberOrNull(
+        latest.operating_profit
+      );
+
+    const totalAssets =
+      numberOrNull(
+        latest.total_assets
+      );
+
+    const currentLiabilities =
+      numberOrNull(
+        latest.current_liabilities
+      );
+
+    let calculatedROCE = null;
+
+    if (
+      operatingProfit !== null &&
       totalAssets !== null &&
       currentLiabilities !== null
-        ? totalAssets - currentLiabilities
-        : null;
+    ) {
+      const capitalEmployed =
+        totalAssets -
+        currentLiabilities;
 
-    const calculatedRoce =
-      capitalEmployed !== null &&
-      capitalEmployed !== 0 &&
-      operatingProfit !== null
-        ? Number(
-            ((operatingProfit / capitalEmployed) * 100).toFixed(2)
-          )
-        : null;
+      if (
+        capitalEmployed > 0
+      ) {
+        calculatedROCE =
+          Number(
+            (
+              (operatingProfit /
+                capitalEmployed) *
+              100
+            ).toFixed(2)
+          );
+      }
+    }
 
-    const debtToEquity =
-      latest.debt_equity_ratio !== null &&
-      latest.debt_equity_ratio !== undefined
-        ? numberOrNull(latest.debt_equity_ratio)
-        : 0;
+    // =====================================================
+    // 11. DEBT / EQUITY
+    // =====================================================
 
-    const operatingCashFlow = numberOrNull(
-      latest.cash_flow_operating
-    );
+    let debtToEquity =
+      numberOrNull(
+        latest.debt_equity_ratio
+      );
 
-    // ---------------------------------------------------------
-    // 5. SHAREHOLDING
-    // ---------------------------------------------------------
+    /*
+      BEL has zero borrowings.
 
-    const shareholdingResponse = await bharatStockFetch(
-      `${requestedSymbol}/shareholding`,
-      bharatStockApiKey
-    );
+      If BharatStock gives null,
+      calculate it ourselves.
+    */
+
+    if (
+      debtToEquity === null
+    ) {
+      const nonCurrentDebt =
+        numberOrNull(
+          latest.borrowings_non_current
+        ) || 0;
+
+      const currentDebt =
+        numberOrNull(
+          latest.borrowings_current
+        ) || 0;
+
+      const totalDebt =
+        nonCurrentDebt +
+        currentDebt;
+
+      if (
+        totalEquity !== null &&
+        totalEquity > 0
+      ) {
+        debtToEquity =
+          Number(
+            (
+              totalDebt /
+              totalEquity
+            ).toFixed(3)
+          );
+      }
+    }
+
+    // =====================================================
+    // 12. OPERATING CASH FLOW
+    // =====================================================
+
+    const operatingCashFlow =
+      numberOrNull(
+        latest.cash_flow_operating
+      );
+
+    // =====================================================
+    // 13. SHAREHOLDING
+    // =====================================================
+
+    const shareholdingResponse =
+      await callBharatStock(
+        `${requestedSymbol}/shareholding`,
+        bharatStockApiKey
+      );
 
     const shareholdingData =
       shareholdingResponse?.data?.data;
 
     if (
-      !Array.isArray(shareholdingData) ||
+      !Array.isArray(
+        shareholdingData
+      ) ||
       shareholdingData.length === 0
     ) {
-      return NextResponse.json({
-        success: false,
-        step: "shareholding",
-        error:
-          "BharatStock returned no shareholding data.",
-      });
+      return NextResponse.json(
+        {
+          success: false,
+          step: "shareholding",
+          error:
+            "BharatStock returned no shareholding data.",
+        },
+        { status: 404 }
+      );
     }
 
-    const latestShareholding = shareholdingData[0];
+    const latestShareholding =
+      shareholdingData[0];
 
-    // ---------------------------------------------------------
-    // 6. RATIOS / VALUATION
-    // ---------------------------------------------------------
+    // =====================================================
+    // 14. RATIOS / VALUATION
+    // =====================================================
 
-    const ratioResponse = await bharatStockFetch(
-      `${requestedSymbol}/ratios`,
-      bharatStockApiKey
-    );
+    const ratioResponse =
+      await callBharatStock(
+        `${requestedSymbol}/ratios`,
+        bharatStockApiKey
+      );
 
-    const ratios = ratioResponse?.data;
+    const ratios =
+      ratioResponse?.data;
 
-    if (!ratios || typeof ratios !== "object") {
-      return NextResponse.json({
-        success: false,
-        step: "ratios",
-        error:
-          "BharatStock returned no ratio data.",
-      });
+    if (
+      !ratios ||
+      typeof ratios !==
+        "object"
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          step: "ratios",
+          error:
+            "BharatStock returned no ratio data.",
+        },
+        { status: 404 }
+      );
     }
 
-    // ---------------------------------------------------------
-    // 7. BUILD FINAL FUNDAMENTALS RECORD
-    // ---------------------------------------------------------
+    // =====================================================
+    // 15. CREATE FUNDAMENTALS RECORD
+    // =====================================================
 
     const record = {
-      instrument_id: instrument.id,
+      instrument_id:
+        instrument.id,
 
-      // Financial fundamentals
-      sales_growth: salesGrowth,
-      profit_growth: profitGrowth,
+      // Financials
+      sales_growth:
+        salesGrowth,
+
+      profit_growth:
+        profitGrowth,
 
       roe:
-        numberOrNull(ratios.roe) !== null
-          ? numberOrNull(ratios.roe)
-          : calculatedRoe,
+        numberOrNull(
+          ratios.roe
+        ) ??
+        calculatedROE,
 
       roce:
-        numberOrNull(ratios.roce) !== null
-          ? numberOrNull(ratios.roce)
-          : calculatedRoce,
+        numberOrNull(
+          ratios.roce
+        ) ??
+        calculatedROCE,
 
-      debt_to_equity: debtToEquity,
+      debt_to_equity:
+        debtToEquity,
 
-      operating_cash_flow: operatingCashFlow,
+      operating_cash_flow:
+        operatingCashFlow,
 
-      free_cash_flow: null,
+      free_cash_flow:
+        null,
 
       // Shareholding
-      promoter_holding: numberOrNull(
-        latestShareholding.promoter_pct
-      ),
+      promoter_holding:
+        numberOrNull(
+          latestShareholding.promoter_pct
+        ),
 
-      promoter_pledge: null,
+      promoter_pledge:
+        null,
 
-      fii_holding: numberOrNull(
-        latestShareholding.fii_pct
-      ),
+      fii_holding:
+        numberOrNull(
+          latestShareholding.fii_pct
+        ),
 
-      dii_holding: numberOrNull(
-        latestShareholding.dii_pct
-      ),
+      dii_holding:
+        numberOrNull(
+          latestShareholding.dii_pct
+        ),
 
-      // Financial period
-      financial_year: latest.fiscal_year || null,
+      // Period
+      financial_year:
+        latest.fiscal_year ||
+        null,
 
-      quarter: latest.quarter || null,
+      quarter:
+        latest.quarter ||
+        null,
 
-      source: "BharatStock",
+      // Source
+      source:
+        "BharatStock",
 
-      updated_at: new Date().toISOString(),
+      updated_at:
+        new Date().toISOString(),
 
       // Valuation
-      market_cap: numberOrNull(
-        ratios.market_cap
-      ),
+      market_cap:
+        numberOrNull(
+          ratios.market_cap
+        ),
 
-      pe_ratio: numberOrNull(
-        ratios.pe_ratio
-      ),
+      pe_ratio:
+        numberOrNull(
+          ratios.pe_ratio
+        ),
 
-      pb_ratio: numberOrNull(
-        ratios.pb_ratio
-      ),
+      pb_ratio:
+        numberOrNull(
+          ratios.pb_ratio
+        ),
 
-      book_value_per_share: numberOrNull(
-        ratios.book_value_per_share
-      ),
+      book_value_per_share:
+        numberOrNull(
+          ratios.book_value_per_share
+        ),
 
-      eps: numberOrNull(
-        ratios.eps
-      ),
+      eps:
+        numberOrNull(
+          ratios.eps
+        ),
 
-      dividend_yield: numberOrNull(
-        ratios.dividend_yield
-      ),
+      dividend_yield:
+        numberOrNull(
+          ratios.dividend_yield
+        ),
 
-      week_52_high: numberOrNull(
-        ratios.week_52_high
-      ),
+      week_52_high:
+        numberOrNull(
+          ratios.week_52_high
+        ),
 
-      week_52_low: numberOrNull(
-        ratios.week_52_low
-      ),
+      week_52_low:
+        numberOrNull(
+          ratios.week_52_low
+        ),
 
       shareholding_date:
-        latestShareholding.as_on_date || null,
+        latestShareholding.as_on_date ||
+        null,
     };
 
-    // ---------------------------------------------------------
-    // 8. UPSERT INTO FUNDAMENTALS
-    // ---------------------------------------------------------
+    // =====================================================
+    // 16. SAVE TO SUPABASE
+    // =====================================================
 
     const {
       data: savedRecord,
       error: saveError,
     } = await supabase
       .from("fundamentals")
-      .upsert(record, {
-        onConflict: "instrument_id",
-      })
+      .upsert(
+        record,
+        {
+          onConflict:
+            "instrument_id",
+        }
+      )
       .select()
       .single();
 
     if (saveError) {
-      return NextResponse.json({
-        success: false,
-        step: "save_fundamentals",
-        error: saveError.message,
-        record_attempted: record,
-      });
+      return NextResponse.json(
+        {
+          success: false,
+          step: "save_fundamentals",
+          error:
+            saveError.message,
+          record_attempted:
+            record,
+        },
+        { status: 500 }
+      );
     }
 
-    // ---------------------------------------------------------
-    // 9. SUCCESS RESPONSE
-    // ---------------------------------------------------------
+    // =====================================================
+    // 17. SUCCESS
+    // =====================================================
 
     return NextResponse.json({
       success: true,
@@ -414,25 +677,46 @@ export async function GET(request) {
         `${instrument.company_name} fundamentals successfully synchronized.`,
 
       stock: {
-        symbol: instrument.symbol,
-        company_name: instrument.company_name,
-        instrument_id: instrument.id,
+        symbol:
+          instrument.symbol,
+
+        company_name:
+          instrument.company_name,
+
+        instrument_id:
+          instrument.id,
       },
 
-      source: "BharatStock",
+      source:
+        "BharatStock",
 
       periods: {
-        latest: latest.fiscal_year,
-        previous: previous?.fiscal_year || null,
+        latest:
+          latest.fiscal_year,
+
+        previous:
+          previous?.fiscal_year ||
+          null,
       },
 
       calculated: {
-        sales_growth: salesGrowth,
-        profit_growth: profitGrowth,
-        roe: record.roe,
-        roce: record.roce,
-        debt_to_equity: debtToEquity,
-        operating_cash_flow: operatingCashFlow,
+        sales_growth:
+          record.sales_growth,
+
+        profit_growth:
+          record.profit_growth,
+
+        roe:
+          record.roe,
+
+        roce:
+          record.roce,
+
+        debt_to_equity:
+          record.debt_to_equity,
+
+        operating_cash_flow:
+          record.operating_cash_flow,
       },
 
       shareholding: {
@@ -456,10 +740,13 @@ export async function GET(request) {
 
       valuation: {
         as_of_date:
-          ratios.as_of_date || null,
+          ratios.as_of_date ||
+          null,
 
         price:
-          numberOrNull(ratios.price),
+          numberOrNull(
+            ratios.price
+          ),
 
         market_cap:
           record.market_cap,
@@ -486,11 +773,18 @@ export async function GET(request) {
           record.week_52_low,
       },
 
-      saved_to: "fundamentals",
+      saved_to:
+        "fundamentals",
 
-      saved_record: savedRecord,
+      saved_record:
+        savedRecord,
     });
   } catch (error) {
+    console.error(
+      "Fundamentals sync error:",
+      error
+    );
+
     return NextResponse.json(
       {
         success: false,
