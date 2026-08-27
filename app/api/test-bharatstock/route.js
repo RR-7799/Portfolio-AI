@@ -3,17 +3,24 @@ import { NextResponse } from "next/server";
 export async function GET() {
   try {
     const response = await fetch(
-      "https://api.bharatstockapi.com/api/v1/stock/financials?symbol=BEL",
+      "https://bharatstockapi.com/v1/stocks/BEL/financials?period_type=annual&page=1&page_size=5",
       {
         headers: {
           "X-API-Key": process.env.BHARATSTOCK_API_KEY,
-          "Content-Type": "application/json",
         },
         cache: "no-store",
       }
     );
 
-    const data = await response.json();
+    const text = await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
 
     return NextResponse.json({
       status: response.status,
