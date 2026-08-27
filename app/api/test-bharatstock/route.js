@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 export async function GET() {
   try {
     const response = await fetch(
-      "https://bharatstockapi.com/v1/stocks/BEL/shareholding",
+      "https://bharatstockapi.com/v1/stocks/BEL/ratios",
       {
         method: "GET",
         headers: {
@@ -29,6 +29,7 @@ export async function GET() {
       success: response.ok,
       data,
     });
+
   } catch (error) {
     return NextResponse.json(
       {
