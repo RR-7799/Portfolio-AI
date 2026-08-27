@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const BASE_URL = "https://bharatstockapi.com/v1/stocks";
+const BASE_URL =
+  "https://bharatstockapi.com/v1/stocks";
 
 function numberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return null;
   }
 
@@ -14,8 +19,11 @@ function numberOrNull(value) {
 }
 
 function calculateGrowth(current, previous) {
-  const currentValue = numberOrNull(current);
-  const previousValue = numberOrNull(previous);
+  const currentValue =
+    numberOrNull(current);
+
+  const previousValue =
+    numberOrNull(previous);
 
   if (
     currentValue === null ||
@@ -34,7 +42,10 @@ function calculateGrowth(current, previous) {
   );
 }
 
-async function callBharatStock(endpoint, apiKey) {
+async function callBharatStock(
+  endpoint,
+  apiKey
+) {
   const response = await fetch(
     `${BASE_URL}/${endpoint}`,
     {
@@ -47,7 +58,8 @@ async function callBharatStock(endpoint, apiKey) {
     }
   );
 
-  const text = await response.text();
+  const text =
+    await response.text();
 
   let data;
 
@@ -77,13 +89,16 @@ export async function GET(request) {
     // =====================================================
 
     const supabaseUrl =
-      process.env.NEXT_PUBLIC_SUPABASE_URL;
+      process.env
+        .NEXT_PUBLIC_SUPABASE_URL;
 
     const supabaseSecretKey =
-      process.env.SUPABASE_SECRET_KEY;
+      process.env
+        .SUPABASE_SECRET_KEY;
 
     const bharatStockApiKey =
-      process.env.BHARATSTOCK_API_KEY;
+      process.env
+        .BHARATSTOCK_API_KEY;
 
     if (!supabaseUrl) {
       return NextResponse.json({
@@ -113,13 +128,14 @@ export async function GET(request) {
     }
 
     // =====================================================
-    // 2. SUPABASE CLIENT
+    // 2. SUPABASE
     // =====================================================
 
-    const supabase = createClient(
-      supabaseUrl,
-      supabaseSecretKey
-    );
+    const supabase =
+      createClient(
+        supabaseUrl,
+        supabaseSecretKey
+      );
 
     // =====================================================
     // 3. SYMBOL
@@ -129,7 +145,9 @@ export async function GET(request) {
       new URL(request.url);
 
     const requestedSymbol =
-      searchParams.get("symbol") ||
+      searchParams.get(
+        "symbol"
+      ) ||
       "INE263A01024";
 
     // =====================================================
@@ -185,17 +203,14 @@ export async function GET(request) {
       );
 
     /*
-     * Actual successful BharatStock financial response:
-
-     {
-       "data": [
-         {...},
-         {...}
-       ]
-     }
-
-     Therefore:
-       financialResponse.data
+     * Actual BharatStock response:
+     *
+     * {
+     *   "data": [
+     *     {...},
+     *     {...}
+     *   ]
+     * }
      */
 
     const financialData =
@@ -219,6 +234,10 @@ export async function GET(request) {
       });
     }
 
+    // =====================================================
+    // 6. SORT FINANCIAL YEARS
+    // =====================================================
+
     const annuals =
       financialData
         .filter(
@@ -240,7 +259,8 @@ export async function GET(request) {
       annuals[0];
 
     const previous =
-      annuals[1] || null;
+      annuals[1] ||
+      null;
 
     if (!latest) {
       return NextResponse.json({
@@ -252,7 +272,7 @@ export async function GET(request) {
     }
 
     // =====================================================
-    // 6. FINANCIAL CALCULATIONS
+    // 7. SALES GROWTH
     // =====================================================
 
     const salesGrowth =
@@ -263,6 +283,10 @@ export async function GET(request) {
           )
         : null;
 
+    // =====================================================
+    // 8. PROFIT GROWTH
+    // =====================================================
+
     const profitGrowth =
       previous
         ? calculateGrowth(
@@ -270,6 +294,10 @@ export async function GET(request) {
             previous.net_profit
           )
         : null;
+
+    // =====================================================
+    // 9. ROE
+    // =====================================================
 
     const netProfit =
       numberOrNull(
@@ -281,7 +309,8 @@ export async function GET(request) {
         latest.total_equity
       );
 
-    let calculatedROE = null;
+    let calculatedROE =
+      null;
 
     if (
       netProfit !== null &&
@@ -298,6 +327,10 @@ export async function GET(request) {
         );
     }
 
+    // =====================================================
+    // 10. ROCE
+    // =====================================================
+
     const operatingProfit =
       numberOrNull(
         latest.operating_profit
@@ -313,7 +346,8 @@ export async function GET(request) {
         latest.current_liabilities
       );
 
-    let calculatedROCE = null;
+    let calculatedROCE =
+      null;
 
     if (
       operatingProfit !== null &&
@@ -337,6 +371,10 @@ export async function GET(request) {
           );
       }
     }
+
+    // =====================================================
+    // 11. DEBT / EQUITY
+    // =====================================================
 
     let debtToEquity =
       numberOrNull(
@@ -374,13 +412,17 @@ export async function GET(request) {
       }
     }
 
+    // =====================================================
+    // 12. OPERATING CASH FLOW
+    // =====================================================
+
     const operatingCashFlow =
       numberOrNull(
         latest.cash_flow_operating
       );
 
     // =====================================================
-    // 7. SHAREHOLDING
+    // 13. SHAREHOLDING
     // =====================================================
 
     const shareholdingResponse =
@@ -390,37 +432,21 @@ export async function GET(request) {
       );
 
     /*
-     * IMPORTANT:
-
-     * Successful test response was:
-
+     * Actual response:
+     *
      * {
      *   "data": {
-     *     "data": [
-     *       {
-     *         "promoter_pct": 51.14,
-     *         "fii_pct": 18.02,
-     *         "dii_pct": 21.02
-     *       }
-     *     ]
+     *     "data": [...]
      *   }
      * }
-
-     * So we use:
-     *
-     * shareholdingResponse.data.data
      */
 
     let shareholdingData =
-      shareholdingResponse?.data?.data;
+      shareholdingResponse
+        ?.data
+        ?.data;
 
-    /*
-     * Extra safety:
-     *
-     * If BharatStock ever returns the array
-     * directly under data, also support that.
-     */
-
+    // Safety fallback
     if (
       !Array.isArray(
         shareholdingData
@@ -455,7 +481,7 @@ export async function GET(request) {
       shareholdingData[0];
 
     // =====================================================
-    // 8. RATIOS
+    // 14. RATIOS / VALUATION
     // =====================================================
 
     const ratioResponse =
@@ -464,19 +490,42 @@ export async function GET(request) {
         bharatStockApiKey
       );
 
+    /*
+     * IMPORTANT:
+     *
+     * Actual BharatStock ratios response:
+     *
+     * {
+     *   "as_of_date": "...",
+     *   "price": 411,
+     *   "market_cap": ...,
+     *   "pe_ratio": 49.58,
+     *   ...
+     * }
+     *
+     * There is NO "data" wrapper.
+     *
+     * Therefore:
+     *
+     * ratioResponse
+     *
+     * is the ratios object.
+     */
+
     const ratios =
-      ratioResponse?.data;
+      ratioResponse;
 
     if (
       !ratios ||
       typeof ratios !==
-        "object"
+        "object" ||
+      Array.isArray(ratios)
     ) {
       return NextResponse.json({
         success: false,
         step: "ratios",
         error:
-          "BharatStock returned no ratio data.",
+          "BharatStock returned invalid ratio data.",
         debug: {
           response:
             ratioResponse,
@@ -485,13 +534,14 @@ export async function GET(request) {
     }
 
     // =====================================================
-    // 9. BUILD RECORD
+    // 15. CREATE DATABASE RECORD
     // =====================================================
 
     const record = {
       instrument_id:
         instrument.id,
 
+      // Financial fundamentals
       sales_growth:
         salesGrowth,
 
@@ -513,9 +563,17 @@ export async function GET(request) {
       debt_to_equity:
         debtToEquity,
 
+      operating_cash_flow:
+        operatingCashFlow,
+
+      free_cash_flow:
+        null,
+
+      // Shareholding
       promoter_holding:
         numberOrNull(
-          latestShareholding.promoter_pct
+          latestShareholding
+            .promoter_pct
         ),
 
       promoter_pledge:
@@ -523,20 +581,17 @@ export async function GET(request) {
 
       fii_holding:
         numberOrNull(
-          latestShareholding.fii_pct
+          latestShareholding
+            .fii_pct
         ),
 
       dii_holding:
         numberOrNull(
-          latestShareholding.dii_pct
+          latestShareholding
+            .dii_pct
         ),
 
-      operating_cash_flow:
-        operatingCashFlow,
-
-      free_cash_flow:
-        null,
-
+      // Financial period
       financial_year:
         latest.fiscal_year ||
         null,
@@ -545,12 +600,14 @@ export async function GET(request) {
         latest.quarter ||
         null,
 
+      // Source
       source:
         "BharatStock",
 
       updated_at:
         new Date().toISOString(),
 
+      // Valuation
       market_cap:
         numberOrNull(
           ratios.market_cap
@@ -592,12 +649,13 @@ export async function GET(request) {
         ),
 
       shareholding_date:
-        latestShareholding.as_on_date ||
+        latestShareholding
+          .as_on_date ||
         null,
     };
 
     // =====================================================
-    // 10. SAVE
+    // 16. UPSERT
     // =====================================================
 
     const {
@@ -627,7 +685,7 @@ export async function GET(request) {
     }
 
     // =====================================================
-    // 11. SUCCESS
+    // 17. SUCCESS
     // =====================================================
 
     return NextResponse.json({
@@ -681,7 +739,8 @@ export async function GET(request) {
 
       shareholding: {
         as_on_date:
-          latestShareholding.as_on_date,
+          latestShareholding
+            .as_on_date,
 
         promoter_pct:
           record.promoter_holding,
@@ -694,7 +753,8 @@ export async function GET(request) {
 
         mutual_funds_pct:
           numberOrNull(
-            latestShareholding.mutual_funds_pct
+            latestShareholding
+              .mutual_funds_pct
           ),
       },
 
