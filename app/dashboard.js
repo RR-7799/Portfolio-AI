@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
@@ -15,15 +15,31 @@ const money = (n) =>
     maximumFractionDigits: 0,
   }).format(Number(n || 0));
 
+const number = (n, decimals = 2) =>
+  Number(n || 0).toLocaleString("en-IN", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+
 export default function Dashboard() {
   const [session, setSession] = useState(null);
+
   const [stocks, setStocks] = useState([]);
   const [mfs, setMfs] = useState([]);
+
+  const [aiScores, setAiScores] = useState([]);
+
   const [loading, setLoading] = useState(true);
+  const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState("");
+  const [aiError, setAiError] = useState("");
 
   useEffect(() => {
+    let mounted = true;
+
     supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+
       setSession(data.session);
 
       if (data.session) {
@@ -36,32 +52,45 @@ export default function Dashboard() {
     const {
       data: listener,
     } = supabase.auth.onAuthStateChange((_event, s) => {
+      if (!mounted) return;
+
       setSession(s);
 
       if (s) {
         loadPortfolio(s.user.id);
+      } else {
+        setStocks([]);
+        setMfs([]);
+        setAiScores([]);
+        setLoading(false);
       }
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   async function loadPortfolio(userId) {
     setLoading(true);
     setError("");
+    setAiError("");
 
     try {
-      // --------------------------------------------------
+      // ==================================================
       // 1. LOAD STOCK HOLDINGS
-      // --------------------------------------------------
+      // ==================================================
 
-      const { data: stockData, error: stockError } =
-        await supabase
-          .from("holdings")
-          .select(
-            "id, broker_account_id, instrument_id, quantity, average_price, invested_value, current_value, unrealized_pnl, pnl_percentage"
-          )
-          .eq("user_id", userId);
+      const {
+        data: stockData,
+        error: stockError,
+      } = await supabase
+        .from("holdings")
+        .select(
+          "id, broker_account_id, instrument_id, quantity, average_price, invested_value, current_value, unrealized_pnl, pnl_percentage"
+        )
+        .eq("user_id", userId);
 
       if (stockError) {
         throw new Error(
@@ -71,9 +100,9 @@ export default function Dashboard() {
 
       const rawStocks = stockData || [];
 
-      // --------------------------------------------------
+      // ==================================================
       // 2. GET INSTRUMENT IDS
-      // --------------------------------------------------
+      // ==================================================
 
       const instrumentIds = [
         ...new Set(
@@ -83,14 +112,17 @@ export default function Dashboard() {
         ),
       ];
 
-      // --------------------------------------------------
+      // ==================================================
       // 3. LOAD INSTRUMENTS
-      // --------------------------------------------------
+      // ==================================================
 
       let instruments = [];
 
       if (instrumentIds.length > 0) {
-        const { data, error } = await supabase
+        const {
+          data,
+          error,
+        } = await supabase
           .from("instruments")
           .select("id, symbol, company_name")
           .in("id", instrumentIds);
@@ -104,9 +136,9 @@ export default function Dashboard() {
         instruments = data || [];
       }
 
-      // --------------------------------------------------
+      // ==================================================
       // 4. GET BROKER IDS
-      // --------------------------------------------------
+      // ==================================================
 
       const brokerIds = [
         ...new Set(
@@ -116,14 +148,17 @@ export default function Dashboard() {
         ),
       ];
 
-      // --------------------------------------------------
+      // ==================================================
       // 5. LOAD BROKER ACCOUNTS
-      // --------------------------------------------------
+      // ==================================================
 
       let brokers = [];
 
       if (brokerIds.length > 0) {
-        const { data, error } = await supabase
+        const {
+          data,
+          error,
+        } = await supabase
           .from("broker_accounts")
           .select("id, broker_name")
           .in("id", brokerIds);
@@ -137,9 +172,9 @@ export default function Dashboard() {
         brokers = data || [];
       }
 
-      // --------------------------------------------------
+      // ==================================================
       // 6. CREATE LOOKUP MAPS
-      // --------------------------------------------------
+      // ==================================================
 
       const instrumentMap = new Map(
         instruments.map((x) => [x.id, x])
@@ -149,9 +184,9 @@ export default function Dashboard() {
         brokers.map((x) => [x.id, x])
       );
 
-      // --------------------------------------------------
+      // ==================================================
       // 7. COMBINE STOCK DATA
-      // --------------------------------------------------
+      // ==================================================
 
       const combinedStocks = rawStocks.map((holding) => {
         const instrument =
@@ -174,17 +209,25 @@ export default function Dashboard() {
         };
       });
 
-      // --------------------------------------------------
-      // 8. LOAD MF HOLDINGS
-      // --------------------------------------------------
+      // ==================================================
+      // 8. LOAD AI SCORES
+      // ==================================================
 
-      const { data: mfData, error: mfError } =
-        await supabase
-          .from("mf_holdings")
-          .select(
-            "id, mutual_fund_id, units, average_nav, invested_value, current_nav, current_value, unrealized_pnl, pnl_percentage"
-          )
-          .eq("user_id", userId);
+      await loadAIScores(instrumentIds);
+
+      // ==================================================
+      // 9. LOAD MF HOLDINGS
+      // ==================================================
+
+      const {
+        data: mfData,
+        error: mfError,
+      } = await supabase
+        .from("mf_holdings")
+        .select(
+          "id, mutual_fund_id, units, average_nav, invested_value, current_nav, current_value, unrealized_pnl, pnl_percentage"
+        )
+        .eq("user_id", userId);
 
       if (mfError) {
         throw new Error(
@@ -194,9 +237,9 @@ export default function Dashboard() {
 
       const rawMFs = mfData || [];
 
-      // --------------------------------------------------
-      // 9. GET MUTUAL FUND IDS
-      // --------------------------------------------------
+      // ==================================================
+      // 10. GET MUTUAL FUND IDS
+      // ==================================================
 
       const mfIds = [
         ...new Set(
@@ -206,14 +249,17 @@ export default function Dashboard() {
         ),
       ];
 
-      // --------------------------------------------------
-      // 10. LOAD MUTUAL FUNDS
-      // --------------------------------------------------
+      // ==================================================
+      // 11. LOAD MUTUAL FUNDS
+      // ==================================================
 
       let mutualFunds = [];
 
       if (mfIds.length > 0) {
-        const { data, error } = await supabase
+        const {
+          data,
+          error,
+        } = await supabase
           .from("mutual_funds")
           .select(
             "id, scheme_name, fund_house, category"
@@ -229,17 +275,17 @@ export default function Dashboard() {
         mutualFunds = data || [];
       }
 
-      // --------------------------------------------------
-      // 11. MUTUAL FUND LOOKUP
-      // --------------------------------------------------
+      // ==================================================
+      // 12. MUTUAL FUND LOOKUP
+      // ==================================================
 
       const mutualFundMap = new Map(
         mutualFunds.map((x) => [x.id, x])
       );
 
-      // --------------------------------------------------
-      // 12. COMBINE MF DATA
-      // --------------------------------------------------
+      // ==================================================
+      // 13. COMBINE MF DATA
+      // ==================================================
 
       const combinedMFs = rawMFs.map((holding) => {
         const fund =
@@ -249,7 +295,8 @@ export default function Dashboard() {
           ...holding,
 
           scheme_name:
-            fund?.scheme_name || "Unknown Mutual Fund",
+            fund?.scheme_name ||
+            "Unknown Mutual Fund",
 
           fund_house:
             fund?.fund_house || "—",
@@ -263,7 +310,12 @@ export default function Dashboard() {
       setMfs(combinedMFs);
     } catch (err) {
       console.error(err);
-      setError(err.message || "Unable to load portfolio.");
+
+      setError(
+        err.message ||
+          "Unable to load portfolio."
+      );
+
       setStocks([]);
       setMfs([]);
     }
@@ -271,31 +323,152 @@ export default function Dashboard() {
     setLoading(false);
   }
 
-  // --------------------------------------------------
+  // ======================================================
+  // LOAD SAVED AI SCORES
+  // ======================================================
+
+  async function loadAIScores(instrumentIds) {
+    if (!instrumentIds.length) {
+      setAiScores([]);
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError("");
+
+    try {
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("ai_scores")
+        .select(
+          `
+          id,
+          instrument_id,
+          total_score,
+          growth_score,
+          profitability_score,
+          debt_score,
+          ownership_score,
+          cashflow_score,
+          valuation_score,
+          risk_score,
+          risk_level,
+          rating,
+          action,
+          ai_summary,
+          score_date,
+          calculated_at
+          `
+        )
+        .in("instrument_id", instrumentIds)
+        .order("calculated_at", {
+          ascending: false,
+        });
+
+      if (error) {
+        console.error(
+          "AI score query error:",
+          error
+        );
+
+        setAiError(
+          "AI scores could not be loaded."
+        );
+
+        setAiScores([]);
+        return;
+      }
+
+      /*
+       * There can be more than one score for a stock.
+       * Because results are sorted newest first,
+       * keep only the newest score for each instrument.
+       */
+
+      const latestScores = new Map();
+
+      (data || []).forEach((score) => {
+        if (
+          !latestScores.has(
+            score.instrument_id
+          )
+        ) {
+          latestScores.set(
+            score.instrument_id,
+            score
+          );
+        }
+      });
+
+      setAiScores(
+        Array.from(latestScores.values())
+      );
+    } catch (err) {
+      console.error(
+        "AI score loading error:",
+        err
+      );
+
+      setAiError(
+        "AI scores could not be loaded."
+      );
+
+      setAiScores([]);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  // ======================================================
+  // AI SCORE LOOKUP
+  // ======================================================
+
+  function getAIScore(instrumentId) {
+    return aiScores.find(
+      (x) =>
+        x.instrument_id === instrumentId
+    );
+  }
+
+  // ======================================================
   // PORTFOLIO CALCULATIONS
-  // --------------------------------------------------
+  // ======================================================
 
   const stockInvested = stocks.reduce(
     (sum, x) =>
-      sum + Number(x.invested_value || 0),
+      sum +
+      Number(
+        x.invested_value || 0
+      ),
     0
   );
 
   const stockValue = stocks.reduce(
     (sum, x) =>
-      sum + Number(x.current_value || 0),
+      sum +
+      Number(
+        x.current_value || 0
+      ),
     0
   );
 
   const mfInvested = mfs.reduce(
     (sum, x) =>
-      sum + Number(x.invested_value || 0),
+      sum +
+      Number(
+        x.invested_value || 0
+      ),
     0
   );
 
   const mfValue = mfs.reduce(
     (sum, x) =>
-      sum + Number(x.current_value || 0),
+      sum +
+      Number(
+        x.current_value || 0
+      ),
     0
   );
 
@@ -313,18 +486,51 @@ export default function Dashboard() {
       ? (pnl / invested) * 100
       : 0;
 
-  // --------------------------------------------------
+  // ======================================================
+  // AI PORTFOLIO SUMMARY
+  // ======================================================
+
+  const scoredStocks = stocks
+    .map((stock) => ({
+      stock,
+      score: getAIScore(
+        stock.instrument_id
+      ),
+    }))
+    .filter((x) => x.score);
+
+  const averageAIScore =
+    scoredStocks.length > 0
+      ? Math.round(
+          scoredStocks.reduce(
+            (sum, x) =>
+              sum +
+              Number(
+                x.score.total_score || 0
+              ),
+            0
+          ) / scoredStocks.length
+        )
+      : null;
+
+  // ======================================================
   // LOGIN
-  // --------------------------------------------------
+  // ======================================================
 
   if (!session) {
     return <Login />;
   }
 
+  // ======================================================
+  // DASHBOARD
+  // ======================================================
+
   return (
     <main className="shell">
 
-      {/* HEADER */}
+      {/* ==================================================
+          HEADER
+      ================================================== */}
 
       <header className="topbar">
 
@@ -354,7 +560,9 @@ export default function Dashboard() {
 
       </header>
 
-      {/* ERROR */}
+      {/* ==================================================
+          ERROR
+      ================================================== */}
 
       {error && (
         <div className="error">
@@ -362,7 +570,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* TOTAL PORTFOLIO */}
+      {/* ==================================================
+          TOTAL PORTFOLIO
+      ================================================== */}
 
       <section className="hero card">
 
@@ -397,7 +607,8 @@ export default function Dashboard() {
 
           <strong>
             {(
-              (value / 90000000) * 100
+              (value / 90000000) *
+              100
             ).toFixed(2)}
             %
           </strong>
@@ -407,7 +618,8 @@ export default function Dashboard() {
             <span
               style={{
                 width: `${Math.min(
-                  (value / 90000000) * 100,
+                  (value / 90000000) *
+                    100,
                   100
                 )}%`,
               }}
@@ -419,7 +631,9 @@ export default function Dashboard() {
 
       </section>
 
-      {/* STOCK + MF SUMMARY */}
+      {/* ==================================================
+          STOCK + MF SUMMARY
+      ================================================== */}
 
       <section className="grid two">
 
@@ -439,14 +653,17 @@ export default function Dashboard() {
 
           <div
             className={
-              stockValue - stockInvested >= 0
+              stockValue -
+                stockInvested >=
+              0
                 ? "positive"
                 : "negative"
             }
           >
             P/L{" "}
             {money(
-              stockValue - stockInvested
+              stockValue -
+                stockInvested
             )}
           </div>
 
@@ -468,14 +685,17 @@ export default function Dashboard() {
 
           <div
             className={
-              mfValue - mfInvested >= 0
+              mfValue -
+                mfInvested >=
+              0
                 ? "positive"
                 : "negative"
             }
           >
             P/L{" "}
             {money(
-              mfValue - mfInvested
+              mfValue -
+                mfInvested
             )}
           </div>
 
@@ -483,7 +703,309 @@ export default function Dashboard() {
 
       </section>
 
-      {/* STOCK HOLDINGS */}
+      {/* ==================================================
+          PORTFOLIO AI
+      ================================================== */}
+
+      <section
+        className="card"
+        style={{
+          marginTop: "20px",
+        }}
+      >
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent:
+              "space-between",
+            alignItems: "center",
+            gap: "20px",
+            flexWrap: "wrap",
+          }}
+        >
+
+          <div>
+
+            <span className="label">
+              PORTFOLIO AI
+            </span>
+
+            <h2
+              style={{
+                marginTop: "8px",
+              }}
+            >
+              AI Investment Intelligence
+            </h2>
+
+            <p>
+              Fundamental, valuation,
+              ownership and risk analysis
+              for your holdings.
+            </p>
+
+          </div>
+
+          {averageAIScore !== null && (
+            <div
+              style={{
+                minWidth: "180px",
+                textAlign: "center",
+                padding: "18px",
+                border:
+                  "1px solid #e2e8f0",
+                borderRadius: "14px",
+              }}
+            >
+
+              <div className="label">
+                AVERAGE AI SCORE
+              </div>
+
+              <div
+                style={{
+                  fontSize: "38px",
+                  fontWeight: "800",
+                  marginTop: "5px",
+                }}
+              >
+                {averageAIScore}
+                <span
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: "500",
+                  }}
+                >
+                  /100
+                </span>
+              </div>
+
+              <div
+                style={{
+                  marginTop: "5px",
+                  fontWeight: "600",
+                }}
+              >
+                {averageAIScore >= 80
+                  ? "STRONG"
+                  : averageAIScore >= 70
+                  ? "GOOD"
+                  : averageAIScore >= 60
+                  ? "AVERAGE"
+                  : "WEAK"}
+              </div>
+
+            </div>
+          )}
+
+        </div>
+
+        {aiLoading && (
+          <p
+            style={{
+              marginTop: "20px",
+            }}
+          >
+            Loading AI intelligence...
+          </p>
+        )}
+
+        {!aiLoading &&
+          scoredStocks.length === 0 && (
+            <div
+              style={{
+                marginTop: "20px",
+                padding: "20px",
+                border:
+                  "1px solid #e2e8f0",
+                borderRadius: "12px",
+              }}
+            >
+              <strong>
+                No AI scores available yet.
+              </strong>
+
+              <p>
+                Run the Portfolio AI scoring
+                engine for your holdings to
+                see scores here.
+              </p>
+            </div>
+          )}
+
+        {!aiLoading &&
+          scoredStocks.length > 0 && (
+
+            <div
+              style={{
+                marginTop: "20px",
+                overflowX: "auto",
+              }}
+            >
+
+              <table>
+
+                <thead>
+
+                  <tr>
+
+                    <th>
+                      Stock
+                    </th>
+
+                    <th>
+                      AI Score
+                    </th>
+
+                    <th>
+                      Rating
+                    </th>
+
+                    <th>
+                      Risk
+                    </th>
+
+                    <th>
+                      Action
+                    </th>
+
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  {scoredStocks.map(
+                    ({
+                      stock,
+                      score,
+                    }) => (
+
+                      <tr
+                        key={
+                          stock.id
+                        }
+                      >
+
+                        <td>
+                          <strong>
+                            {
+                              stock.company_name
+                            }
+                          </strong>
+
+                          <div
+                            style={{
+                              fontSize:
+                                "12px",
+                              opacity:
+                                0.65,
+                              marginTop:
+                                "3px",
+                            }}
+                          >
+                            {
+                              stock.symbol
+                            }
+                          </div>
+                        </td>
+
+                        <td>
+
+                          <strong
+                            style={{
+                              fontSize:
+                                "20px",
+                            }}
+                          >
+                            {
+                              score.total_score
+                            }
+                          </strong>
+
+                          <span
+                            style={{
+                              opacity:
+                                0.6,
+                            }}
+                          >
+                            /100
+                          </span>
+
+                        </td>
+
+                        <td>
+                          <strong>
+                            {
+                              score.rating ||
+                              "—"
+                            }
+                          </strong>
+                        </td>
+
+                        <td>
+                          {
+                            score.risk_level ||
+                            "—"
+                          }
+                        </td>
+
+                        <td>
+
+                          <strong
+                            className={
+                              score.action ===
+                              "BUY" ||
+                              score.action ===
+                              "ACCUMULATE"
+                                ? "positive"
+                                : score.action ===
+                                  "SELL" ||
+                                  score.action ===
+                                  "EXIT"
+                                ? "negative"
+                                : ""
+                            }
+                          >
+                            {
+                              score.action ||
+                              "—"
+                            }
+                          </strong>
+
+                        </td>
+
+                      </tr>
+
+                    )
+                  )}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          )}
+
+        {aiError && (
+          <div
+            style={{
+              marginTop: "12px",
+              fontSize: "13px",
+              opacity: 0.7,
+            }}
+          >
+            {aiError}
+          </div>
+        )}
+
+      </section>
+
+      {/* ==================================================
+          STOCK HOLDINGS
+      ================================================== */}
 
       <section className="card">
 
@@ -499,7 +1021,11 @@ export default function Dashboard() {
 
         {!loading && (
 
-          <div style={{ overflowX: "auto" }}>
+          <div
+            style={{
+              overflowX: "auto",
+            }}
+          >
 
             <table>
 
@@ -535,67 +1061,130 @@ export default function Dashboard() {
                     P/L
                   </th>
 
+                  <th>
+                    AI
+                  </th>
+
                 </tr>
 
               </thead>
 
               <tbody>
 
-                {stocks.map((x) => (
+                {stocks.map((x) => {
 
-                  <tr key={x.id}>
+                  const ai =
+                    getAIScore(
+                      x.instrument_id
+                    );
 
-                    <td>
-                      <strong>
-                        {x.company_name}
-                      </strong>
-                    </td>
+                  return (
 
-                    <td>
-                      {x.symbol}
-                    </td>
+                    <tr key={x.id}>
 
-                    <td>
-                      {x.broker_name}
-                    </td>
+                      <td>
+                        <strong>
+                          {
+                            x.company_name
+                          }
+                        </strong>
+                      </td>
 
-                    <td>
-                      {Number(
-                        x.quantity || 0
-                      ).toLocaleString(
-                        "en-IN"
-                      )}
-                    </td>
+                      <td>
+                        {x.symbol}
+                      </td>
 
-                    <td>
-                      {money(
-                        x.invested_value
-                      )}
-                    </td>
+                      <td>
+                        {x.broker_name}
+                      </td>
 
-                    <td>
-                      {money(
-                        x.current_value
-                      )}
-                    </td>
+                      <td>
+                        {Number(
+                          x.quantity || 0
+                        ).toLocaleString(
+                          "en-IN"
+                        )}
+                      </td>
 
-                    <td
-                      className={
-                        Number(
+                      <td>
+                        {money(
+                          x.invested_value
+                        )}
+                      </td>
+
+                      <td>
+                        {money(
+                          x.current_value
+                        )}
+                      </td>
+
+                      <td
+                        className={
+                          Number(
+                            x.unrealized_pnl
+                          ) >= 0
+                            ? "positive"
+                            : "negative"
+                        }
+                      >
+                        {money(
                           x.unrealized_pnl
-                        ) >= 0
-                          ? "positive"
-                          : "negative"
-                      }
-                    >
-                      {money(
-                        x.unrealized_pnl
-                      )}
-                    </td>
+                        )}
+                      </td>
 
-                  </tr>
+                      <td>
 
-                ))}
+                        {ai ? (
+
+                          <div>
+
+                            <strong
+                              style={{
+                                fontSize:
+                                  "17px",
+                              }}
+                            >
+                              {
+                                ai.total_score
+                              }
+                            </strong>
+
+                            <div
+                              style={{
+                                fontSize:
+                                  "11px",
+                                marginTop:
+                                  "2px",
+                              }}
+                            >
+                              {
+                                ai.action ||
+                                ai.rating ||
+                                "AI"
+                              }
+                            </div>
+
+                          </div>
+
+                        ) : (
+
+                          <span
+                            style={{
+                              opacity:
+                                0.5,
+                            }}
+                          >
+                            —
+                          </span>
+
+                        )}
+
+                      </td>
+
+                    </tr>
+
+                  );
+                })}
 
               </tbody>
 
@@ -607,7 +1196,9 @@ export default function Dashboard() {
 
       </section>
 
-      {/* MUTUAL FUNDS */}
+      {/* ==================================================
+          MUTUAL FUNDS
+      ================================================== */}
 
       <section className="card">
 
@@ -623,7 +1214,11 @@ export default function Dashboard() {
 
         {!loading && (
 
-          <div style={{ overflowX: "auto" }}>
+          <div
+            style={{
+              overflowX: "auto",
+            }}
+          >
 
             <table>
 
@@ -679,16 +1274,22 @@ export default function Dashboard() {
 
                     <td>
                       <strong>
-                        {x.scheme_name}
+                        {
+                          x.scheme_name
+                        }
                       </strong>
                     </td>
 
                     <td>
-                      {x.fund_house}
+                      {
+                        x.fund_house
+                      }
                     </td>
 
                     <td>
-                      {x.category}
+                      {
+                        x.category
+                      }
                     </td>
 
                     <td>
@@ -697,7 +1298,8 @@ export default function Dashboard() {
                       ).toLocaleString(
                         "en-IN",
                         {
-                          maximumFractionDigits: 3,
+                          maximumFractionDigits:
+                            3,
                         }
                       )}
                     </td>
@@ -705,14 +1307,16 @@ export default function Dashboard() {
                     <td>
                       ₹
                       {Number(
-                        x.average_nav || 0
+                        x.average_nav ||
+                          0
                       ).toFixed(2)}
                     </td>
 
                     <td>
                       ₹
                       {Number(
-                        x.current_nav || 0
+                        x.current_nav ||
+                          0
                       ).toFixed(2)}
                     </td>
 
@@ -761,9 +1365,9 @@ export default function Dashboard() {
 }
 
 
-// ======================================================
+// ========================================================
 // LOGIN
-// ======================================================
+// ========================================================
 
 function Login() {
 
@@ -782,14 +1386,20 @@ function Login() {
 
     setError("");
 
-    const { error } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const {
+      error,
+    } =
+      await supabase.auth.signInWithPassword(
+        {
+          email,
+          password,
+        }
+      );
 
     if (error) {
-      setError(error.message);
+      setError(
+        error.message
+      );
     }
   }
 
@@ -811,7 +1421,8 @@ function Login() {
         </h1>
 
         <p>
-          Sign in to view your consolidated portfolio.
+          Sign in to view your
+          consolidated portfolio.
         </p>
 
         <input
@@ -819,7 +1430,9 @@ function Login() {
           placeholder="Email"
           value={email}
           onChange={(e) =>
-            setEmail(e.target.value)
+            setEmail(
+              e.target.value
+            )
           }
           required
         />
@@ -829,7 +1442,9 @@ function Login() {
           placeholder="Password"
           value={password}
           onChange={(e) =>
-            setPassword(e.target.value)
+            setPassword(
+              e.target.value
+            )
           }
           required
         />
