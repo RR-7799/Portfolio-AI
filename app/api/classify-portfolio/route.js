@@ -39,14 +39,14 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // ETF / MUTUAL FUND / FUND-LIKE INSTRUMENTS
+  // FUND / ETF
   // ====================================================
 
   if (
     sym.startsWith("INF") ||
     name.includes("ETF") ||
     name.includes("MUTUAL FUND") ||
-    name.includes("FUND")
+    name.includes("FUND MANAGEMENT")
   ) {
     return {
       security_type: "FUND",
@@ -56,18 +56,23 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // BANK
+  // BANKS
   // ====================================================
 
-  const bankWords = [
-    "BANK",
-    "BANKING",
+  const bankNames = [
+    "HDFC BANK",
+    "FEDERAL BANK",
+    "IDBI BANK",
+    "INDIAN OVERSEAS BANK",
+    "INDUSIND BANK",
+    "STATE BANK OF INDIA",
   ];
 
   if (
-    bankWords.some(
-      (word) => name.includes(word)
-    )
+    bankNames.some(
+      (item) => name.includes(item)
+    ) ||
+    name.includes("BANK LTD")
   ) {
     return {
       security_type: "BANK",
@@ -80,25 +85,26 @@ function classifyStock(companyName, symbol) {
   // FINANCIAL SERVICES
   // ====================================================
 
-  const financialWords = [
-    "FINANC",
-    "FINANCIAL",
-    "NBFC",
+  const financialNames = [
+    "IFCI",
+    "INDIAN RAILWAY FIN",
+    "JM FIN",
+    "SBI FUNDS",
+    "MOTILAL OSWAL",
     "HOUSING FINANCE",
+    "FINANCIAL",
+    "FINANC",
     "CAPITAL",
     "INVESTMENT",
-    "ASSET MANAGEMENT",
-    "FUNDS MANAGEMENT",
+    "INSURANCE",
     "BROKING",
     "BROKER",
-    "INSURANCE",
-    "LIFE INSURANCE",
-    "FINTECH",
+    "NBFC",
   ];
 
   if (
-    financialWords.some(
-      (word) => name.includes(word)
+    financialNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -112,24 +118,24 @@ function classifyStock(companyName, symbol) {
   // DEFENCE
   // ====================================================
 
-  const defenceWords = [
+  const defenceNames = [
+    "BHARAT ELECTRONICS",
+    "GARDEN REACH",
     "DEFENCE",
     "DEFENSE",
     "AEROSPACE",
-    "BHARAT ELECTRONICS",
     "HINDUSTAN AERONAUTICS",
     "BEML",
     "MAZAGON",
     "COCHIN SHIPYARD",
-    "GARDEN REACH",
     "BHARAT DYNAMICS",
     "MIDHANI",
     "SOLAR INDUSTRIES",
   ];
 
   if (
-    defenceWords.some(
-      (word) => name.includes(word)
+    defenceNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -140,52 +146,24 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // PHARMA / HEALTHCARE
-  // ====================================================
-
-  const pharmaWords = [
-    "PHARMA",
-    "PHARMACEUTICAL",
-    "LIFESCIENCES",
-    "LIFE SCIENCES",
-    "BIOCON",
-    "HEALTH",
-    "HEALTHCARE",
-    "HOSPITAL",
-    "HOSPITALS",
-    "LABORATORIES",
-    "LABS",
-  ];
-
-  if (
-    pharmaWords.some(
-      (word) => name.includes(word)
-    )
-  ) {
-    return {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    };
-  }
-
-
-  // ====================================================
   // IT / TECHNOLOGY
   // ====================================================
 
-  const technologyWords = [
-    "SOFTWARE",
-    "TECHNOLOG",
+  const technologyNames = [
+    "TATA CONSULTANCY",
+    "WIPRO",
+    "FCS SOFTWARE",
     "INFOTECH",
+    "TECHNOLOG",
+    "SOFTWARE",
     "IT SERVICES",
-    "SYSTEMS",
     "DIGITAL",
     "COMPUTER",
   ];
 
   if (
-    technologyWords.some(
-      (word) => name.includes(word)
+    technologyNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -196,22 +174,61 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
+  // PHARMA / HEALTHCARE
+  // ====================================================
+
+  const pharmaNames = [
+    "BIOCON",
+    "PHARMA",
+    "PHARMACEUTICAL",
+    "LIFESCIENCES",
+    "LIFE SCIENCES",
+    "HEALTH",
+    "HEALTHCARE",
+    "HOSPITAL",
+    "HOSPITALS",
+    "LABORATORIES",
+    "LABS",
+    "NARAYANA HRUDAYALAYA",
+    "KOPRAN",
+    "MARKSANS",
+  ];
+
+  if (
+    pharmaNames.some(
+      (item) => name.includes(item)
+    )
+  ) {
+    return {
+      security_type: "PHARMA_HEALTHCARE",
+      sector: "PHARMA & HEALTHCARE",
+    };
+  }
+
+
+  // ====================================================
   // POWER / ENERGY
   // ====================================================
 
-  const energyWords = [
+  const energyNames = [
+    "AMARA RAJA ENERGY",
+    "GUJARAT ENERGY",
+    "NTPC",
+    "NHPC",
+    "TATA POWER",
+    "SUZLON",
+    "JAIPRAKASH POWER",
     "POWER",
     "ENERGY",
     "ELECTRIC",
     "ELECTRICITY",
     "SOLAR",
     "RENEWABLE",
-    "GREEN ENERGY",
   ];
 
   if (
-    energyWords.some(
-      (word) => name.includes(word)
+    energyNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -225,16 +242,18 @@ function classifyStock(companyName, symbol) {
   // OIL / GAS
   // ====================================================
 
-  const oilGasWords = [
-    "GAS",
+  const oilGasNames = [
+    "GAIL",
+    "CASTROL",
     "PETROLEUM",
     "OIL",
+    "GAS",
     "REFINER",
   ];
 
   if (
-    oilGasWords.some(
-      (word) => name.includes(word)
+    oilGasNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -248,7 +267,10 @@ function classifyStock(companyName, symbol) {
   // METALS / MINING
   // ====================================================
 
-  const metalsWords = [
+  const metalsNames = [
+    "TATA STEEL",
+    "SAIL",
+    "NMDC",
     "STEEL",
     "MINING",
     "MINES",
@@ -261,8 +283,8 @@ function classifyStock(companyName, symbol) {
   ];
 
   if (
-    metalsWords.some(
-      (word) => name.includes(word)
+    metalsNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -273,10 +295,20 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // CEMENT / INFRA / CONSTRUCTION
+  // INFRA / CONSTRUCTION
   // ====================================================
 
-  const constructionWords = [
+  const infraNames = [
+    "IRB",
+    "NBCC",
+    "NCC",
+    "PSP PROJECTS",
+    "ASHOKA BUILD",
+    "LLOYDS ENGINEER",
+    "JSW INFRA",
+    "GMR",
+    "ENVIRO INFRA",
+    "JK LAKSHMI CEMENT",
     "CEMENT",
     "INFRA",
     "INFRASTRUCTURE",
@@ -289,8 +321,8 @@ function classifyStock(companyName, symbol) {
   ];
 
   if (
-    constructionWords.some(
-      (word) => name.includes(word)
+    infraNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -304,21 +336,23 @@ function classifyStock(companyName, symbol) {
   // AUTOMOBILE
   // ====================================================
 
-  const autoWords = [
-    "MOTOR",
-    "MOTORS",
+  const autoNames = [
+    "TATA MOTORS",
+    "TATA MOTORS PASS",
+    "MOTHERSON",
+    "SONA BLW",
     "AUTOMOBILE",
     "AUTOMOTIVE",
-    "AUTO",
+    "MOTOR",
     "MOBILITY",
-    "MOTHERSON",
+    "AUTO",
     "TYRE",
     "TIRES",
   ];
 
   if (
-    autoWords.some(
-      (word) => name.includes(word)
+    autoNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -332,7 +366,9 @@ function classifyStock(companyName, symbol) {
   // CHEMICALS / FERTILIZERS
   // ====================================================
 
-  const chemicalWords = [
+  const chemicalNames = [
+    "DEEPAK FERTILIZERS",
+    "KREBS BIOCHEMICAL",
     "CHEMICAL",
     "FERTILIZER",
     "FERTILISER",
@@ -340,8 +376,8 @@ function classifyStock(companyName, symbol) {
   ];
 
   if (
-    chemicalWords.some(
-      (word) => name.includes(word)
+    chemicalNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -355,20 +391,25 @@ function classifyStock(companyName, symbol) {
   // CONSUMER
   // ====================================================
 
-  const consumerWords = [
-    "FOODS",
-    "FOOD",
-    "TEXTILE",
-    "RETAIL",
+  const consumerNames = [
+    "ITC HOTELS",
+    "ITC LIMITED",
+    "KALYAN JEWELLERS",
+    "TRIDENT",
+    "TUNI TEXTILE",
+    "MISHTANN FOODS",
     "JEWELLERS",
     "JEWELLERY",
-    "HOTELS",
+    "TEXTILE",
+    "RETAIL",
     "HOTEL",
+    "FOODS",
+    "FOOD",
   ];
 
   if (
-    consumerWords.some(
-      (word) => name.includes(word)
+    consumerNames.some(
+      (item) => name.includes(item)
     )
   ) {
     return {
@@ -379,7 +420,7 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // DEFAULT
+  // OTHER
   // ====================================================
 
   return {
@@ -398,9 +439,9 @@ export async function GET() {
     const supabase = getSupabase();
 
 
-    // ==================================================
-    // 1. GET UNIQUE INSTRUMENT IDS FROM HOLDINGS
-    // ==================================================
+    // --------------------------------------------------
+    // GET HOLDINGS
+    // --------------------------------------------------
 
     const {
       data: holdings,
@@ -408,6 +449,7 @@ export async function GET() {
     } = await supabase
       .from("holdings")
       .select("instrument_id");
+
 
     if (holdingsError) {
       return NextResponse.json({
@@ -440,9 +482,9 @@ export async function GET() {
     }
 
 
-    // ==================================================
-    // 2. GET INSTRUMENTS
-    // ==================================================
+    // --------------------------------------------------
+    // GET INSTRUMENTS
+    // --------------------------------------------------
 
     const {
       data: instruments,
@@ -468,9 +510,9 @@ export async function GET() {
     }
 
 
-    // ==================================================
-    // 3. CLASSIFY + SAVE
-    // ==================================================
+    // --------------------------------------------------
+    // CLASSIFY
+    // --------------------------------------------------
 
     const results = [];
     const errors = [];
@@ -492,7 +534,6 @@ export async function GET() {
 
 
         const {
-          data: saved,
           error: saveError,
         } = await supabase
           .from("instruments")
@@ -506,11 +547,7 @@ export async function GET() {
           .eq(
             "id",
             instrument.id
-          )
-          .select(
-            "id, symbol, company_name, security_type, sector"
-          )
-          .single();
+          );
 
 
         if (saveError) {
@@ -553,6 +590,7 @@ export async function GET() {
             classification.sector,
         });
 
+
       } catch (error) {
 
         errors.push({
@@ -571,9 +609,9 @@ export async function GET() {
     }
 
 
-    // ==================================================
-    // 4. RESPONSE
-    // ==================================================
+    // --------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------
 
     return NextResponse.json({
 
@@ -601,6 +639,7 @@ export async function GET() {
       errors,
     });
 
+
   } catch (error) {
 
     console.error(
@@ -611,9 +650,7 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-
         step: "server",
-
         error:
           error instanceof Error
             ? error.message
