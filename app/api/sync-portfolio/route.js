@@ -6,12 +6,56 @@ export const dynamic = "force-dynamic";
 const BASE_URL =
   "https://bharatstockapi.com/v1/stocks";
 
+// ======================================================
+// SETTINGS
+// ======================================================
+
+// Data newer than this will not be requested again.
+const FRESHNESS_HOURS = 24;
+
 
 // ======================================================
-// HELPERS
+// SUPABASE
+// ======================================================
+
+function getSupabase() {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+  const key =
+    process.env.SUPABASE_SECRET_KEY;
+
+  if (!url) {
+    throw new Error(
+      "NEXT_PUBLIC_SUPABASE_URL is missing."
+    );
+  }
+
+  if (!key) {
+    throw new Error(
+      "SUPABASE_SECRET_KEY is missing."
+    );
+  }
+
+  return createClient(
+    url,
+    key,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }
+  );
+}
+
+
+// ======================================================
+// NUMBER HELPER
 // ======================================================
 
 function numberOrNull(value) {
+
   if (
     value === null ||
     value === undefined ||
@@ -20,13 +64,24 @@ function numberOrNull(value) {
     return null;
   }
 
-  const n = Number(value);
+  const number =
+    Number(value);
 
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(number)
+    ? number
+    : null;
 }
 
 
-function calculateGrowth(current, previous) {
+// ======================================================
+// GROWTH CALCULATION
+// ======================================================
+
+function calculateGrowth(
+  current,
+  previous
+) {
+
   const currentValue =
     numberOrNull(current);
 
@@ -43,8 +98,11 @@ function calculateGrowth(current, previous) {
 
   return Number(
     (
-      ((currentValue - previousValue) /
-        Math.abs(previousValue)) *
+      (
+        (currentValue -
+          previousValue) /
+        Math.abs(previousValue)
+      ) *
       100
     ).toFixed(2)
   );
@@ -52,26 +110,29 @@ function calculateGrowth(current, previous) {
 
 
 // ======================================================
-// BHARATSTOCK API
+// BHARATSTOCK REQUEST
 // ======================================================
 
 async function callBharatStock(
   endpoint,
   apiKey
 ) {
-  const response = await fetch(
-    `${BASE_URL}/${endpoint}`,
-    {
-      method: "GET",
 
-      headers: {
-        "X-API-Key": apiKey,
-        Accept: "application/json",
-      },
+  const response =
+    await fetch(
+      `${BASE_URL}/${endpoint}`,
+      {
+        method: "GET",
 
-      cache: "no-store",
-    }
-  );
+        headers: {
+          "X-API-Key": apiKey,
+          Accept:
+            "application/json",
+        },
+
+        cache: "no-store",
+      }
+    );
 
   const text =
     await response.text();
@@ -79,22 +140,95 @@ async function callBharatStock(
   let data;
 
   try {
-    data = JSON.parse(text);
+    data =
+      JSON.parse(text);
   } catch {
     data = text;
   }
 
-  if (!response.ok) {
-    throw new Error(
-      `BharatStock ${response.status}: ${
-        typeof data === "string"
-          ? data
-          : JSON.stringify(data)
-      }`
-    );
+
+  // ----------------------------------------------
+  // RATE LIMIT
+  // ----------------------------------------------
+
+  if (
+    response.status === 429
+  ) {
+
+    const error =
+      new Error(
+        "BHARATSTOCK_RATE_LIMIT"
+      );
+
+    error.status = 429;
+
+    throw error;
   }
 
+
+  // ----------------------------------------------
+  // OTHER API ERRORS
+  // ----------------------------------------------
+
+  if (!response.ok) {
+
+    const error =
+      new Error(
+        `BharatStock ${response.status}: ${
+          typeof data === "string"
+            ? data
+            : JSON.stringify(data)
+        }`
+      );
+
+    error.status =
+      response.status;
+
+    throw error;
+  }
+
+
   return data;
+}
+
+
+// ======================================================
+// CHECK IF DATA IS FRESH
+// ======================================================
+
+function isFresh(
+  updatedAt
+) {
+
+  if (!updatedAt) {
+    return false;
+  }
+
+  const updated =
+    new Date(updatedAt);
+
+  if (
+    Number.isNaN(
+      updated.getTime()
+    )
+  ) {
+    return false;
+  }
+
+  const now =
+    Date.now();
+
+  const age =
+    now -
+    updated.getTime();
+
+  const maxAge =
+    FRESHNESS_HOURS *
+    60 *
+    60 *
+    1000;
+
+  return age < maxAge;
 }
 
 
@@ -104,38 +238,44 @@ async function callBharatStock(
 
 async function syncOneStock(
   supabase,
-  bharatStockApiKey,
+  apiKey,
   instrument
 ) {
+
   const symbol =
     instrument.symbol;
 
-  // ----------------------------------------------------
+
+  // ====================================================
   // FINANCIALS
-  // ----------------------------------------------------
+  // ====================================================
 
   const financialResponse =
     await callBharatStock(
       `${symbol}/financials?period_type=annual&page=1&page_size=5`,
-      bharatStockApiKey
+      apiKey
     );
 
   const financialData =
     financialResponse?.data;
 
+
   if (
-    !Array.isArray(financialData) ||
+    !Array.isArray(
+      financialData
+    ) ||
     financialData.length === 0
   ) {
+
     throw new Error(
       "BharatStock returned no annual financial data."
     );
   }
 
 
-  // ----------------------------------------------------
+  // ====================================================
   // SORT FINANCIAL YEARS
-  // ----------------------------------------------------
+  // ====================================================
 
   const annuals =
     financialData
@@ -154,22 +294,26 @@ async function syncOneStock(
           )
       );
 
+
   const latest =
     annuals[0];
 
   const previous =
-    annuals[1] || null;
+    annuals[1] ||
+    null;
+
 
   if (!latest) {
+
     throw new Error(
       "Could not identify latest financial period."
     );
   }
 
 
-  // ----------------------------------------------------
-  // SALES GROWTH
-  // ----------------------------------------------------
+  // ====================================================
+  // GROWTH
+  // ====================================================
 
   const salesGrowth =
     previous
@@ -180,10 +324,6 @@ async function syncOneStock(
       : null;
 
 
-  // ----------------------------------------------------
-  // PROFIT GROWTH
-  // ----------------------------------------------------
-
   const profitGrowth =
     previous
       ? calculateGrowth(
@@ -193,9 +333,9 @@ async function syncOneStock(
       : null;
 
 
-  // ----------------------------------------------------
+  // ====================================================
   // ROE
-  // ----------------------------------------------------
+  // ====================================================
 
   const netProfit =
     numberOrNull(
@@ -207,27 +347,32 @@ async function syncOneStock(
       latest.total_equity
     );
 
-  let calculatedROE = null;
+  let calculatedROE =
+    null;
+
 
   if (
     netProfit !== null &&
     totalEquity !== null &&
     totalEquity !== 0
   ) {
+
     calculatedROE =
       Number(
         (
-          (netProfit /
-            totalEquity) *
+          (
+            netProfit /
+            totalEquity
+          ) *
           100
         ).toFixed(2)
       );
   }
 
 
-  // ----------------------------------------------------
+  // ====================================================
   // ROCE
-  // ----------------------------------------------------
+  // ====================================================
 
   const operatingProfit =
     numberOrNull(
@@ -244,23 +389,32 @@ async function syncOneStock(
       latest.current_liabilities
     );
 
-  let calculatedROCE = null;
+  let calculatedROCE =
+    null;
+
 
   if (
     operatingProfit !== null &&
     totalAssets !== null &&
     currentLiabilities !== null
   ) {
+
     const capitalEmployed =
       totalAssets -
       currentLiabilities;
 
-    if (capitalEmployed > 0) {
+
+    if (
+      capitalEmployed > 0
+    ) {
+
       calculatedROCE =
         Number(
           (
-            (operatingProfit /
-              capitalEmployed) *
+            (
+              operatingProfit /
+              capitalEmployed
+            ) *
             100
           ).toFixed(2)
         );
@@ -268,50 +422,56 @@ async function syncOneStock(
   }
 
 
-  // ----------------------------------------------------
+  // ====================================================
   // DEBT / EQUITY
-  // ----------------------------------------------------
+  // ====================================================
 
   let debtToEquity =
     numberOrNull(
       latest.debt_equity_ratio
     );
 
+
   if (
     debtToEquity === null
   ) {
+
     const nonCurrentDebt =
       numberOrNull(
         latest.borrowings_non_current
       ) || 0;
+
 
     const currentDebt =
       numberOrNull(
         latest.borrowings_current
       ) || 0;
 
+
     const totalDebt =
       nonCurrentDebt +
       currentDebt;
+
 
     if (
       totalEquity !== null &&
       totalEquity > 0
     ) {
+
       debtToEquity =
         Number(
           (
             totalDebt /
             totalEquity
-          ).toFixed(3)
+          ).toFixed(4)
         );
     }
   }
 
 
-  // ----------------------------------------------------
+  // ====================================================
   // OPERATING CASH FLOW
-  // ----------------------------------------------------
+  // ====================================================
 
   const operatingCashFlow =
     numberOrNull(
@@ -326,15 +486,16 @@ async function syncOneStock(
   const shareholdingResponse =
     await callBharatStock(
       `${symbol}/shareholding`,
-      bharatStockApiKey
+      apiKey
     );
+
 
   let shareholdingData =
     shareholdingResponse
       ?.data
       ?.data;
 
-  // Safety fallback
+
   if (
     !Array.isArray(
       shareholdingData
@@ -343,9 +504,11 @@ async function syncOneStock(
       shareholdingResponse?.data
     )
   ) {
+
     shareholdingData =
       shareholdingResponse.data;
   }
+
 
   if (
     !Array.isArray(
@@ -353,27 +516,31 @@ async function syncOneStock(
     ) ||
     shareholdingData.length === 0
   ) {
+
     throw new Error(
       "BharatStock returned no shareholding data."
     );
   }
+
 
   const latestShareholding =
     shareholdingData[0];
 
 
   // ====================================================
-  // RATIOS / VALUATION
+  // RATIOS
   // ====================================================
 
   const ratioResponse =
     await callBharatStock(
       `${symbol}/ratios`,
-      bharatStockApiKey
+      apiKey
     );
+
 
   const ratios =
     ratioResponse;
+
 
   if (
     !ratios ||
@@ -381,6 +548,7 @@ async function syncOneStock(
       "object" ||
     Array.isArray(ratios)
   ) {
+
     throw new Error(
       "BharatStock returned invalid ratio data."
     );
@@ -388,7 +556,7 @@ async function syncOneStock(
 
 
   // ====================================================
-  // DATABASE RECORD
+  // RECORD
   // ====================================================
 
   const record = {
@@ -448,7 +616,7 @@ async function syncOneStock(
       ),
 
 
-    // Period
+    // Financial period
 
     financial_year:
       latest.fiscal_year ||
@@ -518,25 +686,28 @@ async function syncOneStock(
 
 
   // ====================================================
-  // UPSERT
+  // SAVE
   // ====================================================
 
   const {
-    data: savedRecord,
+    data: saved,
     error: saveError,
-  } = await supabase
-    .from("fundamentals")
-    .upsert(
-      record,
-      {
-        onConflict:
-          "instrument_id",
-      }
-    )
-    .select()
-    .single();
+  } =
+    await supabase
+      .from("fundamentals")
+      .upsert(
+        record,
+        {
+          onConflict:
+            "instrument_id",
+        }
+      )
+      .select()
+      .single();
+
 
   if (saveError) {
+
     throw new Error(
       saveError.message
     );
@@ -544,7 +715,7 @@ async function syncOneStock(
 
 
   // ====================================================
-  // RETURN RESULT
+  // RETURN
   // ====================================================
 
   return {
@@ -602,7 +773,7 @@ async function syncOneStock(
       record.pb_ratio,
 
     saved_id:
-      savedRecord?.id ||
+      saved?.id ||
       null,
   };
 }
@@ -634,31 +805,34 @@ export async function GET() {
 
 
     if (!supabaseUrl) {
+
       return NextResponse.json({
         success: false,
         step: "configuration",
         error:
-          "NEXT_PUBLIC_SUPABASE_URL is missing",
+          "NEXT_PUBLIC_SUPABASE_URL is missing.",
       });
     }
 
 
     if (!supabaseSecretKey) {
+
       return NextResponse.json({
         success: false,
         step: "configuration",
         error:
-          "SUPABASE_SECRET_KEY is missing",
+          "SUPABASE_SECRET_KEY is missing.",
       });
     }
 
 
     if (!bharatStockApiKey) {
+
       return NextResponse.json({
         success: false,
         step: "configuration",
         error:
-          "BHARATSTOCK_API_KEY is missing",
+          "BHARATSTOCK_API_KEY is missing.",
       });
     }
 
@@ -670,7 +844,13 @@ export async function GET() {
     const supabase =
       createClient(
         supabaseUrl,
-        supabaseSecretKey
+        supabaseSecretKey,
+        {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+          },
+        }
       );
 
 
@@ -681,11 +861,12 @@ export async function GET() {
     const {
       data: holdings,
       error: holdingsError,
-    } = await supabase
-      .from("holdings")
-      .select(
-        "instrument_id"
-      );
+    } =
+      await supabase
+        .from("holdings")
+        .select(
+          "instrument_id"
+        );
 
 
     if (holdingsError) {
@@ -736,15 +917,16 @@ export async function GET() {
     const {
       data: instruments,
       error: instrumentsError,
-    } = await supabase
-      .from("instruments")
-      .select(
-        "id, symbol, company_name"
-      )
-      .in(
-        "id",
-        instrumentIds
-      );
+    } =
+      await supabase
+        .from("instruments")
+        .select(
+          "id, symbol, company_name"
+        )
+        .in(
+          "id",
+          instrumentIds
+        );
 
 
     if (instrumentsError) {
@@ -759,17 +941,141 @@ export async function GET() {
 
 
     // ==================================================
-    // SYNC
+    // GET EXISTING FUNDAMENTALS
     // ==================================================
 
-    const successful = [];
+    const {
+      data: existingFundamentals,
+      error: fundamentalsError,
+    } =
+      await supabase
+        .from("fundamentals")
+        .select(
+          "instrument_id, updated_at"
+        )
+        .in(
+          "instrument_id",
+          instrumentIds
+        );
+
+
+    if (fundamentalsError) {
+
+      return NextResponse.json({
+        success: false,
+        step: "fundamentals",
+        error:
+          fundamentalsError.message,
+      });
+    }
+
+
+    const fundamentalsMap =
+      new Map();
+
+
+    for (
+      const item of
+        existingFundamentals || []
+    ) {
+
+      fundamentalsMap.set(
+        item.instrument_id,
+        item
+      );
+    }
+
+
+    // ==================================================
+    // RESULTS
+    // ==================================================
+
+    const synced = [];
+    const skipped = [];
     const failed = [];
 
+    let rateLimitReached =
+      false;
+
+
+    // ==================================================
+    // PROCESS STOCKS
+    // ==================================================
 
     for (
       const instrument of
         instruments || []
     ) {
+
+      // ----------------------------------------------
+      // STOP AFTER RATE LIMIT
+      // ----------------------------------------------
+
+      if (
+        rateLimitReached
+      ) {
+
+        skipped.push({
+
+          symbol:
+            instrument.symbol,
+
+          company_name:
+            instrument.company_name,
+
+          instrument_id:
+            instrument.id,
+
+          reason:
+            "Skipped because BharatStock daily rate limit was reached.",
+        });
+
+        continue;
+      }
+
+
+      // ----------------------------------------------
+      // CHECK FRESH DATA
+      // ----------------------------------------------
+
+      const existing =
+        fundamentalsMap.get(
+          instrument.id
+        );
+
+
+      if (
+        existing &&
+        isFresh(
+          existing.updated_at
+        )
+      ) {
+
+        skipped.push({
+
+          symbol:
+            instrument.symbol,
+
+          company_name:
+            instrument.company_name,
+
+          instrument_id:
+            instrument.id,
+
+          reason:
+            "Fundamentals are already fresh.",
+
+          updated_at:
+            existing.updated_at,
+        });
+
+        continue;
+      }
+
+
+      // ----------------------------------------------
+      // SYNC
+      // ----------------------------------------------
 
       try {
 
@@ -780,11 +1086,53 @@ export async function GET() {
             instrument
           );
 
-        successful.push(
+
+        synced.push(
           result
         );
 
+
       } catch (error) {
+
+        // ------------------------------------------
+        // RATE LIMIT
+        // ------------------------------------------
+
+        if (
+          error?.status ===
+            429 ||
+          error?.message ===
+            "BHARATSTOCK_RATE_LIMIT"
+        ) {
+
+          rateLimitReached =
+            true;
+
+
+          failed.push({
+
+            symbol:
+              instrument.symbol,
+
+            company_name:
+              instrument.company_name,
+
+            instrument_id:
+              instrument.id,
+
+            reason:
+              "BharatStock daily API limit reached.",
+
+            status: 429,
+          });
+
+          continue;
+        }
+
+
+        // ------------------------------------------
+        // OTHER FAILURE
+        // ------------------------------------------
 
         failed.push({
 
@@ -797,7 +1145,7 @@ export async function GET() {
           instrument_id:
             instrument.id,
 
-          error:
+          reason:
             error instanceof Error
               ? error.message
               : String(error),
@@ -815,7 +1163,13 @@ export async function GET() {
       success: true,
 
       message:
-        "Portfolio fundamentals synchronization completed.",
+        "Smart portfolio synchronization completed.",
+
+      settings: {
+
+        freshness_hours:
+          FRESHNESS_HOURS,
+      },
 
       summary: {
 
@@ -825,14 +1179,22 @@ export async function GET() {
         unique_instruments:
           instrumentIds.length,
 
-        successful:
-          successful.length,
+        synced:
+          synced.length,
+
+        skipped:
+          skipped.length,
 
         failed:
           failed.length,
+
+        rate_limit_reached:
+          rateLimitReached,
       },
 
-      successful,
+      synced,
+
+      skipped,
 
       failed,
     });
@@ -841,7 +1203,7 @@ export async function GET() {
   } catch (error) {
 
     console.error(
-      "Portfolio sync error:",
+      "Smart portfolio sync error:",
       error
     );
 
@@ -857,7 +1219,6 @@ export async function GET() {
             ? error.message
             : String(error),
       },
-
       {
         status: 500,
       }
