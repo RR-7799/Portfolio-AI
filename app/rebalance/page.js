@@ -1,0 +1,29 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+const money=v=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(Number(v||0));
+const pct=v=>`${Number(v||0).toFixed(1)}%`;
+
+export default function RebalancePage(){
+ const [session,setSession]=useState(null),[data,setData]=useState(null),[loading,setLoading]=useState(true),[error,setError]=useState("");
+ const [capital,setCapital]=useState("50000");
+ useEffect(()=>{let mounted=true; supabase.auth.getSession().then(({data})=>{if(!mounted)return;setSession(data.session);if(data.session)load(data.session.user.id);else setLoading(false)});const {data:listener}=supabase.auth.onAuthStateChange((_e,s)=>{setSession(s);if(s)load(s.user.id);else setLoading(false)});return()=>{mounted=false;listener.subscription.unsubscribe()};},[]);
+ async function load(userId){try{setLoading(true);setError("");const r=await fetch(`/api/rebalance?user_id=${encodeURIComponent(userId)}`,{cache:"no-store"});const b=await r.json();if(!r.ok||!b.success)throw new Error(b.error||"Unable to load rebalancer");setData(b)}catch(e){setError(e.message)}finally{setLoading(false)}}
+ const plan=useMemo(()=>{if(!data)return[];const addable=data.rows.filter(r=>r.action_plan==="ADD"&&r.difference>0).sort((a,b)=>b.difference-a.difference);const total=addable.reduce((s,r)=>s+r.difference,0);const c=Math.max(0,Number(capital)||0);return addable.map(r=>({...r,recommended_add:Number((c*(r.difference/total)).toFixed(0))}))},[data,capital]);
+ if(!session)return <main className="shell"><section className="card"><h1>Sign in required</h1><p>Please sign in on the main dashboard first.</p><Link href="/">Go to Dashboard</Link></section></main>;
+ return <main className="shell">
+  <header className="topbar"><div><div className="eyebrow">PORTFOLIO AI / REBALANCER</div><h1>Portfolio Rebalancer</h1><p>Current allocation versus model target allocation.</p></div><div style={{display:"flex",gap:8}}><Link href="/command-center"><button>Command Center</button></Link><Link href="/risk"><button>Risk</button></Link></div></header>
+  {error&&<div className="error">{error}</div>}
+  {loading?<section className="card"><h2>Loading rebalancer…</h2></section>:data&&<>
+   <section className="grid three"><div className="card"><span className="label">PORTFOLIO VALUE</span><h2>{money(data.portfolio.total_value)}</h2></div><div className="card"><span className="label">STOCKS</span><h2>{money(data.portfolio.stock_value)}</h2></div><div className="card"><span className="label">CASH INPUT</span><h2>{money(Number(capital)||0)}</h2></div></section>
+   {data.warnings?.length>0&&<section className="card"><h2>Warnings</h2>{data.warnings.map((w,i)=><p key={i}>⚠ {w}</p>)}</section>}
+   <section className="card"><div className="sectionHead"><h2>Capital allocator</h2><span className="muted">New money only</span></div><p>Enter fresh capital. Allocation is weighted toward the largest gaps versus model target weight.</p><div style={{display:"flex",gap:10,alignItems:"center",marginBottom:16}}><span>₹</span><input value={capital} onChange={e=>setCapital(e.target.value.replace(/[^0-9]/g,""))} style={{padding:"12px",border:"1px solid #d9dee8",borderRadius:10,width:180}}/><strong>{money(Number(capital)||0)}</strong></div>{plan.length?<table><thead><tr><th>Stock</th><th>Current</th><th>Target</th><th>Gap</th><th>Recommended</th></tr></thead><tbody>{plan.slice(0,10).map(r=><tr key={r.id}><td><strong>{r.company_name}</strong><small>{r.symbol}</small></td><td>{pct(r.current_weight)}</td><td>{pct(r.target_weight)}</td><td>{pct(r.difference)}</td><td><strong>{money(r.recommended_add)}</strong></td></tr>)}</tbody></table>:<p>No clear add opportunities under the current model.</p>}</section>
+   <section className="card"><h2>Rebalancing map</h2><div style={{overflowX:"auto"}}><table><thead><tr><th>Company</th><th>Current</th><th>Target</th><th>Score</th><th>Risk</th><th>Plan</th><th>Amount</th></tr></thead><tbody>{data.rows.map(r=><tr key={r.id}><td><strong>{r.company_name}</strong><small>{r.sector} · {r.symbol}</small></td><td>{pct(r.current_weight)}</td><td>{pct(r.target_weight)}</td><td>{r.score==null?"—":Number(r.score).toFixed(1)}</td><td>{r.risk}</td><td><span className={`badge ${r.action_plan.includes("ADD")?"buy":r.action_plan.includes("TRIM")||r.action_plan.includes("EXIT")?"reduce":"hold"}`}>{r.action_plan}</span></td><td>{money(r.estimated_rupees)}</td></tr>)}</tbody></table></div></section>
+   <section className="card"><h2>Methodology</h2><p>Targets are heuristic model weights driven by AI score and risk. They are not personalised financial advice and are not trade orders.</p></section>
+  </>}
+ </main>
+}
