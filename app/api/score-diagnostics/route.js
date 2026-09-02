@@ -15,9 +15,7 @@ const supabase = createClient(
 function normalizeSector(rawSector) {
   const s = String(rawSector || "").toUpperCase();
 
-  if (s.includes("BANK")) {
-    return "BANK";
-  }
+  if (s.includes("BANK")) return "BANK";
 
   if (
     s.includes("DEFENCE") ||
@@ -159,7 +157,7 @@ function getBreakdown(scoreRow) {
 }
 
 // ============================================================
-// COMPONENT VALUE HELPER
+// COMPONENT VALUE
 // ============================================================
 
 function getComponentValue(
@@ -200,10 +198,7 @@ function generateFlags({
 }) {
   const flags = [];
 
-  // ----------------------------------------------------------
-  // Extremely high score + low confidence
-  // ----------------------------------------------------------
-
+  // High score + low confidence
   if (
     score !== null &&
     score >= 90 &&
@@ -222,10 +217,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
   // High score + partial data
-  // ----------------------------------------------------------
-
   if (
     score !== null &&
     score >= 85 &&
@@ -244,10 +236,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
-  // BUY + incomplete data
-  // ----------------------------------------------------------
-
+  // BUY + partial data
   if (
     action === "BUY" &&
     completeness !== null &&
@@ -265,10 +254,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
   // Missing valuation
-  // ----------------------------------------------------------
-
   if (
     valuationScore === null ||
     valuationScore === undefined
@@ -285,10 +271,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
   // Very low data
-  // ----------------------------------------------------------
-
   if (
     completeness !== null &&
     completeness < 30
@@ -305,10 +288,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
   // Partial data
-  // ----------------------------------------------------------
-
   else if (
     completeness !== null &&
     completeness < 80
@@ -325,10 +305,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
-  // Bank-specific data warning
-  // ----------------------------------------------------------
-
+  // Bank-specific warning
   if (
     sector === "BANK" &&
     completeness !== null &&
@@ -346,10 +323,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
-  // Sector still OTHER
-  // ----------------------------------------------------------
-
+  // OTHER sector
   if (
     sector === "OTHER"
   ) {
@@ -365,10 +339,7 @@ function generateFlags({
     });
   }
 
-  // ----------------------------------------------------------
-  // Extreme score calibration warning
-  // ----------------------------------------------------------
-
+  // 90+ score
   if (
     score !== null &&
     score >= 90
@@ -381,14 +352,11 @@ function generateFlags({
         "MEDIUM",
 
       message:
-        "Score is in the extreme high range and should be reviewed during model calibration.",
+        "Score is in the extreme high range and should be reviewed during calibration.",
     });
   }
 
-  // ----------------------------------------------------------
   // High score + high risk
-  // ----------------------------------------------------------
-
   if (
     score !== null &&
     score >= 80 &&
@@ -410,16 +378,13 @@ function generateFlags({
 }
 
 // ============================================================
-// GET DIAGNOSTICS
+// GET
 // ============================================================
 
 export async function GET() {
   try {
     // ========================================================
-    // 1. GET HOLDINGS
-    //
-    // Only instrument_id is required.
-    // This avoids assumptions about the holdings schema.
+    // 1. HOLDINGS
     // ========================================================
 
     const {
@@ -441,10 +406,7 @@ export async function GET() {
     ) {
       return NextResponse.json({
         success: true,
-
-        message:
-          "No holdings found.",
-
+        message: "No holdings found.",
         diagnostics: [],
       });
     }
@@ -465,10 +427,10 @@ export async function GET() {
     ];
 
     // ========================================================
-    // 3. GET INSTRUMENTS
+    // 3. INSTRUMENTS
     //
     // IMPORTANT:
-    // Your schema uses `company`, not `name`.
+    // Actual schema uses company_name.
     // ========================================================
 
     const {
@@ -479,7 +441,7 @@ export async function GET() {
       .select(`
         id,
         symbol,
-        company,
+        company_name,
         sector
       `)
       .in(
@@ -504,7 +466,7 @@ export async function GET() {
       );
 
     // ========================================================
-    // 4. GET EXISTING AI SCORES
+    // 4. AI SCORES
     // ========================================================
 
     const {
@@ -566,7 +528,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // No score
+      // NO SCORE
       // ------------------------------------------------------
 
       if (!scoreRow) {
@@ -577,8 +539,8 @@ export async function GET() {
           symbol:
             instrument.symbol,
 
-          company:
-            instrument.company,
+          company_name:
+            instrument.company_name,
 
           raw_sector:
             instrument.sector,
@@ -632,7 +594,7 @@ export async function GET() {
       }
 
       // ------------------------------------------------------
-      // Parse score breakdown
+      // BREAKDOWN
       // ------------------------------------------------------
 
       const breakdown =
@@ -641,7 +603,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Main score
+      // SCORE
       // ------------------------------------------------------
 
       const score =
@@ -650,7 +612,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Sector
+      // SECTOR
       // ------------------------------------------------------
 
       const normalizedSector =
@@ -660,7 +622,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Completeness
+      // COMPLETENESS
       // ------------------------------------------------------
 
       const completeness =
@@ -671,7 +633,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Confidence
+      // CONFIDENCE
       // ------------------------------------------------------
 
       const confidence =
@@ -682,7 +644,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Valuation
+      // VALUATION
       // ------------------------------------------------------
 
       const valuationScore =
@@ -696,7 +658,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Components
+      // COMPONENTS
       // ------------------------------------------------------
 
       const businessQuality =
@@ -749,7 +711,7 @@ export async function GET() {
         );
 
       // ------------------------------------------------------
-      // Diagnostic flags
+      // FLAGS
       // ------------------------------------------------------
 
       const flags =
@@ -773,7 +735,7 @@ export async function GET() {
         });
 
       // ------------------------------------------------------
-      // Data status
+      // STATUS
       // ------------------------------------------------------
 
       let status =
@@ -804,7 +766,7 @@ export async function GET() {
       }
 
       // ------------------------------------------------------
-      // Push diagnostic
+      // RESULT
       // ------------------------------------------------------
 
       diagnostics.push({
@@ -814,8 +776,8 @@ export async function GET() {
         symbol:
           instrument.symbol,
 
-        company:
-          instrument.company,
+        company_name:
+          instrument.company_name,
 
         raw_sector:
           instrument.sector,
@@ -876,7 +838,7 @@ export async function GET() {
     }
 
     // ========================================================
-    // 6. SCORED STOCKS
+    // 6. SCORED
     // ========================================================
 
     const scored =
@@ -910,7 +872,7 @@ export async function GET() {
         : null;
 
     // ========================================================
-    // 8. HIGH SCORE STOCKS
+    // 8. HIGH SCORES
     // ========================================================
 
     const highScoreStocks =
@@ -921,7 +883,7 @@ export async function GET() {
       );
 
     // ========================================================
-    // 9. FLAGGED STOCKS
+    // 9. FLAGGED
     // ========================================================
 
     const flagged =
@@ -942,7 +904,7 @@ export async function GET() {
       );
 
     // ========================================================
-    // 11. BUY CANDIDATES THAT NEED REVIEW
+    // 11. BUY CANDIDATES NEEDING REVIEW
     // ========================================================
 
     const buyNeedsReview =
@@ -1086,17 +1048,14 @@ export async function GET() {
           (item) =>
             item.score !== null &&
             (
-              // Score 90+
               item.score >= 90 ||
 
-              // 85+ with partial data
               (
                 item.score >= 85 &&
                 item.completeness !== null &&
                 item.completeness < 80
               ) ||
 
-              // Specific high-risk flags
               item.flags.some(
                 (flag) =>
                   flag.code ===
@@ -1150,7 +1109,7 @@ export async function GET() {
     }
 
     // ========================================================
-    // 16. FINAL RESPONSE
+    // 16. RESPONSE
     // ========================================================
 
     return NextResponse.json({
