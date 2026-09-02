@@ -11,20 +11,38 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function parseDate(value) {
-  if (!value) return null;
+function parseFinancialDate(value) {
+  if (value === null || value === undefined || value === "") return null;
+
   const text = String(value).trim();
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     const date = new Date(`${text}T00:00:00Z`);
     return Number.isNaN(date.getTime()) ? null : date;
   }
-  const match = text.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})$/i);
-  if (!match) return null;
-  const monthMap = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-  const month = monthMap[match[1].slice(0, 3).toLowerCase()];
-  const year = Number(match[2]);
-  if (!Number.isInteger(year) || month === undefined) return null;
-  return new Date(Date.UTC(year, month + 1, 0));
+
+  const monthMatch = text.match(
+    /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})$/i
+  );
+  if (monthMatch) {
+    const monthMap = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const month = monthMap[monthMatch[1].slice(0, 3).toLowerCase()];
+    const year = Number(monthMatch[2]);
+    return Number.isInteger(year) && month !== undefined
+      ? new Date(Date.UTC(year, month + 1, 0))
+      : null;
+  }
+
+  // Indian financial year formats such as 2025-26, FY 2025-26, FY2025/26.
+  const fyMatch = text.match(/^(?:FY\s*)?(\d{4})\s*[-/]\s*(\d{2}|\d{4})$/i);
+  if (fyMatch) {
+    const startYear = Number(fyMatch[1]);
+    if (!Number.isInteger(startYear)) return null;
+    // Treat the FY end as 31 March of the following calendar year.
+    return new Date(Date.UTC(startYear + 1, 2, 31));
+  }
+
+  return null;
 }
 
 function ageInMonths(date, now) {
@@ -56,16 +74,16 @@ function recalcRating(score, confidence) {
 }
 
 function recalcAction(score, baseAction, freshnessStatus, confidence, risk, valuation) {
-  const freshnessBuyEligible = ["FRESH", "ACCEPTABLE"].includes(freshnessStatus);
+  const buyEligible = ["FRESH", "ACCEPTABLE"].includes(freshnessStatus);
 
   if (
     baseAction === "BUY" &&
     score >= 85 &&
     confidence >= 80 &&
-    freshnessBuyEligible &&
+    buyEligible &&
     valuation !== null &&
     valuation >= 45 &&
-    (risk === null || risk >= 55)
+    risk >= 55
   ) {
     return "BUY";
   }
@@ -83,11 +101,10 @@ function recalcAction(score, baseAction, freshnessStatus, confidence, risk, valu
 function addFreshnessDiagnostics(diagnostics, freshness) {
   const next = [...(diagnostics || [])];
   if (freshness.status === "MISSING") next.push("FINANCIAL_DATA_MISSING");
-  else if (freshness.status === "VERY_STALE") next.push("FINANCIAL_DATA_VERY_STALE");
-  else if (freshness.status === "STALE") next.push("FINANCIAL_DATA_STALE");
-  else if (freshness.status === "AGING") next.push("FINANCIAL_DATA_AGING");
-  else if (freshness.status === "ACCEPTABLE") next.push("FINANCIAL_DATA_ACCEPTABLE");
-
+  if (freshness.status === "VERY_STALE") next.push("FINANCIAL_DATA_VERY_STALE");
+  if (freshness.status === "STALE") next.push("FINANCIAL_DATA_STALE");
+  if (freshness.status === "AGING") next.push("FINANCIAL_DATA_AGING");
+  if (freshness.status === "ACCEPTABLE") next.push("FINANCIAL_DATA_ACCEPTABLE");
   if (freshness.confidence < 80) next.push("LOW_FRESHNESS");
   return [...new Set(next)];
 }
@@ -98,11 +115,10 @@ export async function GET() {
     const basePayload = await baseResponse.json();
 
     if (!basePayload?.success) {
-      return NextResponse.json({
-        ...basePayload,
-        engine_version: ENGINE_VERSION,
-        based_on: "safe_v4_1",
-      }, { status: baseResponse.status || 500 });
+      return NextResponse.json(
+        { ...basePayload, engine_version: ENGINE_VERSION, based_on: "safe_v4_1" },
+        { status: baseResponse.status || 500 }
+      );
     }
 
     const now = new Date();
@@ -129,7 +145,7 @@ export async function GET() {
       if (base.status === "SKIPPED_FUND" || !base.instrument_id) return base;
 
       const f = fundamentalsMap.get(base.instrument_id) || {};
-      const financialDate = parseDate(f.financial_year);
+      const financialDate = parseFinancialDate(f.financial_year);
       const financialAgeMonths = ageInMonths(financialDate, now);
       const freshness = classifyFreshness(financialAgeMonths);
       const baseConfidence = Number(base.confidence ?? 0);
@@ -137,8 +153,10 @@ export async function GET() {
       const baseScore = base.total_score ?? null;
       const adjustedScore = baseScore === null ? null : Math.min(baseScore, freshness.maxScore);
       const valuation = base.valuation?.score ?? null;
-      const risk = base.risk_level === "HIGH" ? 40 : base.risk_level === "MODERATE" ? 65 : 80;
-      const action = recalcAction(adjustedScore, base.action, freshness.status, effectiveConfidence, risk, valuation);
+
+      // Use the v4.1 risk label only as a safety proxy; the exact risk score remains inside score_breakdown.
+      const exactRisk = Number(base.components?.risk ?? 0);
+      const action = recalcAction(adjustedScore, base.action, freshness.status, effectiveConfidence, exactRisk, valuation);
       const rating = recalcRating(adjustedScore, effectiveConfidence);
       const diagnostics = addFreshnessDiagnostics(base.diagnostics, freshness);
 
@@ -158,22 +176,19 @@ export async function GET() {
           max_score: freshness.maxScore,
           as_of: now.toISOString(),
         },
-        diagnostics,
-        notes: [
-          ...(existingBreakdown.notes || []),
-          `Freshness status: ${freshness.status}.`,
-        ],
+        diagnostics: [...new Set(diagnostics)],
+        notes: [...(existingBreakdown.notes || []), `Freshness status: ${freshness.status}.`],
         rules: {
           ...(existingBreakdown.rules || {}),
           freshness_rule: "Effective confidence is the lower of completeness confidence and financial freshness confidence.",
           freshness_ceiling: "FRESH 100, ACCEPTABLE 84, AGING 74, STALE 69, VERY_STALE 59, MISSING 49.",
           freshness_buy_rule: "BUY requires FRESH or ACCEPTABLE financial data; stale or missing financial data blocks BUY.",
+          financial_year_rule: "FY strings such as 2025-26 are interpreted as ending 31 March 2026.",
         },
       };
 
       return {
         ...base,
-        status: base.status,
         total_score: adjustedScore,
         rating,
         action,
@@ -194,15 +209,18 @@ export async function GET() {
     let upserted = 0;
     for (const item of finalResults) {
       if (item.status === "SKIPPED_FUND" || !item.instrument_id || item.total_score === null) continue;
-      const { error } = await supabase.from("ai_scores").upsert({
-        instrument_id: item.instrument_id,
-        total_score: item.total_score,
-        rating: item.rating,
-        action: item.action,
-        risk_level: item.risk_level,
-        score_breakdown: item.score_breakdown,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "instrument_id" });
+      const { error } = await supabase.from("ai_scores").upsert(
+        {
+          instrument_id: item.instrument_id,
+          total_score: item.total_score,
+          rating: item.rating,
+          action: item.action,
+          risk_level: item.risk_level,
+          score_breakdown: item.score_breakdown,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "instrument_id" }
+      );
       if (error) throw new Error(`AI score upsert failed for ${item.company_name || item.instrument_id}: ${error.message}`);
       upserted++;
     }
@@ -257,10 +275,9 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Portfolio AI V4.2 error:", error);
-    return NextResponse.json({
-      success: false,
-      engine_version: ENGINE_VERSION,
-      error: error?.message || "Unknown error",
-    }, { status: 500 });
+    return NextResponse.json(
+      { success: false, engine_version: ENGINE_VERSION, error: error?.message || "Unknown error" },
+      { status: 500 }
+    );
   }
 }
