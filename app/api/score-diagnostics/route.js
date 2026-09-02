@@ -9,18 +9,13 @@ const supabase = createClient(
 );
 
 // ------------------------------------------------------------
-// Helpers
+// SECTOR NORMALIZATION
 // ------------------------------------------------------------
 
 function normalizeSector(rawSector) {
   const s = String(rawSector || "").toUpperCase();
 
-  if (
-    s.includes("BANK") ||
-    s.includes("BANKING")
-  ) {
-    return "BANK";
-  }
+  if (s.includes("BANK")) return "BANK";
 
   if (
     s.includes("DEFENCE") ||
@@ -119,8 +114,16 @@ function normalizeSector(rawSector) {
   return "OTHER";
 }
 
+// ------------------------------------------------------------
+// NUMBER HELPER
+// ------------------------------------------------------------
+
 function num(value) {
-  if (value === null || value === undefined || value === "") {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return null;
   }
 
@@ -129,14 +132,22 @@ function num(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ------------------------------------------------------------
+// SCORE BREAKDOWN PARSER
+// ------------------------------------------------------------
+
 function getBreakdown(scoreRow) {
   if (!scoreRow?.score_breakdown) {
     return {};
   }
 
-  if (typeof scoreRow.score_breakdown === "string") {
+  if (
+    typeof scoreRow.score_breakdown === "string"
+  ) {
     try {
-      return JSON.parse(scoreRow.score_breakdown);
+      return JSON.parse(
+        scoreRow.score_breakdown
+      );
     } catch {
       return {};
     }
@@ -145,14 +156,27 @@ function getBreakdown(scoreRow) {
   return scoreRow.score_breakdown;
 }
 
-function getComponentValue(breakdown, key) {
-  const value = breakdown?.components?.[key];
+// ------------------------------------------------------------
+// COMPONENT EXTRACTOR
+// ------------------------------------------------------------
 
-  if (value === undefined || value === null) {
+function getComponentValue(
+  breakdown,
+  key
+) {
+  const value =
+    breakdown?.components?.[key];
+
+  if (
+    value === undefined ||
+    value === null
+  ) {
     return null;
   }
 
-  if (typeof value === "object") {
+  if (
+    typeof value === "object"
+  ) {
     return num(value.score);
   }
 
@@ -160,13 +184,12 @@ function getComponentValue(breakdown, key) {
 }
 
 // ------------------------------------------------------------
-// Diagnostic flag engine
+// DIAGNOSTIC FLAGS
 // ------------------------------------------------------------
 
 function generateFlags({
   score,
   action,
-  rating,
   risk,
   completeness,
   confidence,
@@ -175,24 +198,37 @@ function generateFlags({
 }) {
   const flags = [];
 
-  if (score !== null && score >= 90 && confidence !== null && confidence < 80) {
+  // Very high score + low confidence
+  if (
+    score !== null &&
+    score >= 90 &&
+    confidence !== null &&
+    confidence < 80
+  ) {
     flags.push({
       code: "HIGH_SCORE_LOW_CONFIDENCE",
       severity: "HIGH",
       message:
-        "Score is extremely high despite incomplete confidence. Review before treating this as a strong candidate.",
+        "Very high score despite reduced data confidence. Review before relying on this score.",
     });
   }
 
-  if (score !== null && score >= 85 && completeness !== null && completeness < 80) {
+  // High score + partial data
+  if (
+    score !== null &&
+    score >= 85 &&
+    completeness !== null &&
+    completeness < 80
+  ) {
     flags.push({
       code: "HIGH_SCORE_PARTIAL_DATA",
       severity: "HIGH",
       message:
-        "High score is being produced with less than 80% data completeness.",
+        "High score is being generated while fundamental data completeness is below 80%.",
     });
   }
 
+  // BUY + incomplete data
   if (
     action === "BUY" &&
     completeness !== null &&
@@ -202,10 +238,11 @@ function generateFlags({
       code: "BUY_WITH_PARTIAL_DATA",
       severity: "HIGH",
       message:
-        "BUY action generated while the fundamental dataset is incomplete.",
+        "BUY action exists even though the underlying data is incomplete.",
     });
   }
 
+  // Missing valuation
   if (
     valuationScore === null ||
     valuationScore === undefined
@@ -214,26 +251,37 @@ function generateFlags({
       code: "VALUATION_MISSING",
       severity: "MEDIUM",
       message:
-        "No usable valuation component was recorded. The score may be relying heavily on business-quality factors.",
+        "Valuation score is unavailable. Review PE/PB and other valuation inputs.",
     });
   }
 
-  if (completeness !== null && completeness < 50) {
+  // Very low data
+  if (
+    completeness !== null &&
+    completeness < 30
+  ) {
     flags.push({
       code: "VERY_LOW_DATA",
       severity: "CRITICAL",
       message:
-        "Very little fundamental data is available. This stock should not be treated as reliably scored.",
+        "Fundamental data is too incomplete for a reliable score.",
     });
-  } else if (completeness !== null && completeness < 80) {
+  }
+
+  // Partial data
+  else if (
+    completeness !== null &&
+    completeness < 80
+  ) {
     flags.push({
       code: "PARTIAL_DATA",
       severity: "MEDIUM",
       message:
-        "Some important fundamental fields are missing.",
+        "Important fundamental fields are missing.",
     });
   }
 
+  // Bank-specific
   if (
     sector === "BANK" &&
     completeness !== null &&
@@ -243,19 +291,23 @@ function generateFlags({
       code: "BANK_DATA_INCOMPLETE",
       severity: "HIGH",
       message:
-        "Bank-specific analysis requires asset-quality and capital data. Review missing banking metrics.",
+        "Bank analysis requires banking-specific metrics such as asset quality and capital strength.",
     });
   }
 
-  if (sector === "OTHER") {
+  // Other sector
+  if (
+    sector === "OTHER"
+  ) {
     flags.push({
       code: "SECTOR_UNCLASSIFIED",
       severity: "MEDIUM",
       message:
-        "Stock is still classified as OTHER. Sector-specific scoring may therefore be limited.",
+        "Sector is classified as OTHER. Sector-specific scoring may be limited.",
     });
   }
 
+  // Extremely high score
   if (
     score !== null &&
     score >= 90
@@ -264,20 +316,21 @@ function generateFlags({
       code: "CALIBRATION_REVIEW",
       severity: "MEDIUM",
       message:
-        "Score is in the top range. Review component-level scores before finalizing scoring thresholds.",
+        "Score is in the extreme high range and should be reviewed during model calibration.",
     });
   }
 
+  // High score + high risk
   if (
-    risk === "HIGH" &&
     score !== null &&
-    score >= 80
+    score >= 80 &&
+    risk === "HIGH"
   ) {
     flags.push({
       code: "HIGH_SCORE_HIGH_RISK",
       severity: "HIGH",
       message:
-        "High score and high risk coexist. The model may be rewarding fundamentals more heavily than risk.",
+        "The stock has both a high score and high risk. Risk weighting should be reviewed.",
     });
   }
 
@@ -291,20 +344,19 @@ function generateFlags({
 export async function GET() {
   try {
     // --------------------------------------------------------
-    // 1. Holdings
+    // 1. GET HOLDINGS
+    //
+    // IMPORTANT:
+    // Only request instrument_id.
+    // Do NOT assume avg_price/current_value/etc.
     // --------------------------------------------------------
 
-    const { data: holdings, error: holdingsError } =
-      await supabase
-        .from("holdings")
-        .select(`
-          id,
-          instrument_id,
-          quantity,
-          avg_price,
-          current_price,
-          current_value
-        `);
+    const {
+      data: holdings,
+      error: holdingsError,
+    } = await supabase
+      .from("holdings")
+      .select("instrument_id");
 
     if (holdingsError) {
       throw new Error(
@@ -312,7 +364,10 @@ export async function GET() {
       );
     }
 
-    if (!holdings || holdings.length === 0) {
+    if (
+      !holdings ||
+      holdings.length === 0
+    ) {
       return NextResponse.json({
         success: true,
         message: "No holdings found.",
@@ -321,27 +376,38 @@ export async function GET() {
     }
 
     // --------------------------------------------------------
-    // 2. Instruments
+    // 2. UNIQUE INSTRUMENT IDS
     // --------------------------------------------------------
 
     const instrumentIds = [
       ...new Set(
         holdings
-          .map((h) => h.instrument_id)
+          .map(
+            (h) => h.instrument_id
+          )
           .filter(Boolean)
       ),
     ];
 
-    const { data: instruments, error: instrumentsError } =
-      await supabase
-        .from("instruments")
-        .select(`
-          id,
-          symbol,
-          name,
-          sector
-        `)
-        .in("id", instrumentIds);
+    // --------------------------------------------------------
+    // 3. GET INSTRUMENTS
+    // --------------------------------------------------------
+
+    const {
+      data: instruments,
+      error: instrumentsError,
+    } = await supabase
+      .from("instruments")
+      .select(`
+        id,
+        symbol,
+        name,
+        sector
+      `)
+      .in(
+        "id",
+        instrumentIds
+      );
 
     if (instrumentsError) {
       throw new Error(
@@ -349,27 +415,38 @@ export async function GET() {
       );
     }
 
-    const instrumentMap = new Map(
-      (instruments || []).map((i) => [i.id, i])
-    );
+    const instrumentMap =
+      new Map(
+        (instruments || []).map(
+          (item) => [
+            item.id,
+            item,
+          ]
+        )
+      );
 
     // --------------------------------------------------------
-    // 3. Existing AI scores
+    // 4. GET AI SCORES
     // --------------------------------------------------------
 
-    const { data: aiScores, error: scoresError } =
-      await supabase
-        .from("ai_scores")
-        .select(`
-          instrument_id,
-          action,
-          rating,
-          risk_level,
-          total_score,
-          updated_at,
-          score_breakdown
-        `)
-        .in("instrument_id", instrumentIds);
+    const {
+      data: aiScores,
+      error: scoresError,
+    } = await supabase
+      .from("ai_scores")
+      .select(`
+        instrument_id,
+        action,
+        rating,
+        risk_level,
+        total_score,
+        updated_at,
+        score_breakdown
+      `)
+      .in(
+        "instrument_id",
+        instrumentIds
+      );
 
     if (scoresError) {
       throw new Error(
@@ -377,41 +454,64 @@ export async function GET() {
       );
     }
 
-    const scoreMap = new Map(
-      (aiScores || []).map((s) => [s.instrument_id, s])
-    );
+    const scoreMap =
+      new Map(
+        (aiScores || []).map(
+          (item) => [
+            item.instrument_id,
+            item,
+          ]
+        )
+      );
 
     // --------------------------------------------------------
-    // 4. Build diagnostics
+    // 5. BUILD DIAGNOSTICS
     // --------------------------------------------------------
 
     const diagnostics = [];
 
-    for (const holding of holdings) {
-      const instrument = instrumentMap.get(
-        holding.instrument_id
-      );
+    for (
+      const instrumentId of instrumentIds
+    ) {
+      const instrument =
+        instrumentMap.get(
+          instrumentId
+        );
 
       if (!instrument) {
         continue;
       }
 
-      const scoreRow = scoreMap.get(
-        holding.instrument_id
-      );
+      const scoreRow =
+        scoreMap.get(
+          instrumentId
+        );
+
+      // ------------------------------------------------------
+      // NO SCORE
+      // ------------------------------------------------------
 
       if (!scoreRow) {
         diagnostics.push({
-          instrument_id: instrument.id,
-          symbol: instrument.symbol,
-          name: instrument.name,
+          instrument_id:
+            instrument.id,
 
-          raw_sector: instrument.sector,
-          normalized_sector: normalizeSector(
-            instrument.sector
-          ),
+          symbol:
+            instrument.symbol,
 
-          status: "NO_SCORE",
+          name:
+            instrument.name,
+
+          raw_sector:
+            instrument.sector,
+
+          normalized_sector:
+            normalizeSector(
+              instrument.sector
+            ),
+
+          status:
+            "NO_SCORE",
 
           score: null,
           rating: null,
@@ -422,7 +522,9 @@ export async function GET() {
           confidence: null,
 
           components: {},
-          valuation_score: null,
+
+          valuation_score:
+            null,
 
           flags: [
             {
@@ -437,13 +539,25 @@ export async function GET() {
         continue;
       }
 
-      const breakdown = getBreakdown(scoreRow);
+      // ------------------------------------------------------
+      // EXISTING BREAKDOWN
+      // ------------------------------------------------------
 
-      const score = num(scoreRow.total_score);
+      const breakdown =
+        getBreakdown(
+          scoreRow
+        );
+
+      const score =
+        num(
+          scoreRow.total_score
+        );
 
       const normalizedSector =
         breakdown?.normalized_sector ||
-        normalizeSector(instrument.sector);
+        normalizeSector(
+          instrument.sector
+        );
 
       const completeness =
         num(
@@ -476,14 +590,14 @@ export async function GET() {
           breakdown?.business_quality
         );
 
-      const profitability =
-        num(
-          breakdown?.components?.profitability
-        );
-
       const growth =
         num(
           breakdown?.components?.growth
+        );
+
+      const profitability =
+        num(
+          breakdown?.components?.profitability
         );
 
       const balance =
@@ -508,156 +622,250 @@ export async function GET() {
           breakdown?.components?.risk
         );
 
-      const flags = generateFlags({
-        score,
-        action: scoreRow.action,
-        rating: scoreRow.rating,
-        risk: scoreRow.risk_level,
-        completeness,
-        confidence,
-        valuationScore,
-        sector: normalizedSector,
-      });
+      // ------------------------------------------------------
+      // FLAGS
+      // ------------------------------------------------------
+
+      const flags =
+        generateFlags({
+          score,
+          action:
+            scoreRow.action,
+          risk:
+            scoreRow.risk_level,
+          completeness,
+          confidence,
+          valuationScore,
+          sector:
+            normalizedSector,
+        });
+
+      // ------------------------------------------------------
+      // STATUS
+      // ------------------------------------------------------
+
+      let status = "NORMAL";
+
+      if (
+        completeness !== null &&
+        completeness < 30
+      ) {
+        status = "BLOCKED";
+      } else if (
+        completeness !== null &&
+        completeness < 50
+      ) {
+        status = "PROVISIONAL";
+      } else if (
+        completeness !== null &&
+        completeness < 80
+      ) {
+        status = "PARTIAL";
+      }
 
       diagnostics.push({
-        instrument_id: instrument.id,
+        instrument_id:
+          instrument.id,
 
-        symbol: instrument.symbol,
-        name: instrument.name,
+        symbol:
+          instrument.symbol,
 
-        raw_sector: instrument.sector,
-        normalized_sector: normalizedSector,
+        name:
+          instrument.name,
 
-        status:
-          completeness !== null && completeness < 30
-            ? "BLOCKED"
-            : completeness !== null && completeness < 50
-            ? "PROVISIONAL"
-            : completeness !== null && completeness < 80
-            ? "PARTIAL"
-            : "NORMAL",
+        raw_sector:
+          instrument.sector,
+
+        normalized_sector:
+          normalizedSector,
+
+        status,
 
         score,
-        rating: scoreRow.rating,
-        action: scoreRow.action,
-        risk: scoreRow.risk_level,
+
+        rating:
+          scoreRow.rating,
+
+        action:
+          scoreRow.action,
+
+        risk:
+          scoreRow.risk_level,
 
         completeness,
+
         confidence,
 
         components: {
-          business_quality: businessQuality,
+          business_quality:
+            businessQuality,
+
           growth,
+
           profitability,
+
           balance,
-          cash_flow: cashFlow,
+
+          cash_flow:
+            cashFlow,
+
           ownership,
-          valuation: valuationScore,
-          risk: riskComponent,
+
+          valuation:
+            valuationScore,
+
+          risk:
+            riskComponent,
         },
 
-        valuation_score: valuationScore,
+        valuation_score:
+          valuationScore,
 
-        score_breakdown: breakdown,
+        score_breakdown:
+          breakdown,
 
         flags,
 
-        updated_at: scoreRow.updated_at,
+        updated_at:
+          scoreRow.updated_at,
       });
     }
 
     // --------------------------------------------------------
-    // 5. Summary statistics
+    // 6. SUMMARY
     // --------------------------------------------------------
 
-    const scored = diagnostics.filter(
-      (x) =>
-        x.score !== null &&
-        x.status !== "BLOCKED"
-    );
+    const scored =
+      diagnostics.filter(
+        (x) =>
+          x.score !== null &&
+          x.status !== "BLOCKED"
+      );
 
-    const highScoreStocks = diagnostics.filter(
-      (x) =>
-        x.score !== null &&
-        x.score >= 85
-    );
-
-    const flagged = diagnostics.filter(
-      (x) => x.flags && x.flags.length > 0
-    );
-
-    const buyCandidates = diagnostics.filter(
-      (x) =>
-        x.action === "BUY"
-    );
-
-    const buyNeedsReview = buyCandidates.filter(
-      (x) =>
-        (x.completeness !== null &&
-          x.completeness < 80) ||
-        (x.confidence !== null &&
-          x.confidence < 80) ||
-        x.flags.some(
-          (f) =>
-            f.code === "HIGH_SCORE_LOW_CONFIDENCE" ||
-            f.code === "BUY_WITH_PARTIAL_DATA"
-        )
-    );
-
-    const avgScore =
-      scored.length > 0
+    const averageScore =
+      scored.length
         ? Number(
             (
               scored.reduce(
-                (sum, x) => sum + x.score,
+                (sum, item) =>
+                  sum +
+                  item.score,
                 0
-              ) / scored.length
+              ) /
+              scored.length
             ).toFixed(2)
           )
         : null;
 
+    const highScoreStocks =
+      diagnostics.filter(
+        (x) =>
+          x.score !== null &&
+          x.score >= 85
+      );
+
+    const flagged =
+      diagnostics.filter(
+        (x) =>
+          x.flags &&
+          x.flags.length > 0
+      );
+
+    const buyCandidates =
+      diagnostics.filter(
+        (x) =>
+          x.action === "BUY"
+      );
+
+    const buyNeedsReview =
+      buyCandidates.filter(
+        (x) =>
+          (
+            x.completeness !== null &&
+            x.completeness < 80
+          ) ||
+          (
+            x.confidence !== null &&
+            x.confidence < 80
+          ) ||
+          x.flags.some(
+            (flag) =>
+              flag.code ===
+                "HIGH_SCORE_LOW_CONFIDENCE" ||
+              flag.code ===
+                "BUY_WITH_PARTIAL_DATA"
+          )
+      );
+
+    // --------------------------------------------------------
+    // 7. SECTOR SUMMARY
+    // --------------------------------------------------------
+
     const sectorSummary = {};
 
-    for (const item of diagnostics) {
+    for (
+      const item of diagnostics
+    ) {
       const sector =
-        item.normalized_sector || "OTHER";
+        item.normalized_sector ||
+        "OTHER";
 
-      if (!sectorSummary[sector]) {
+      if (
+        !sectorSummary[sector]
+      ) {
         sectorSummary[sector] = {
           total: 0,
           scored: 0,
           blocked: 0,
-          average_score: null,
           scores: [],
+          average_score: null,
         };
       }
 
-      sectorSummary[sector].total++;
+      sectorSummary[sector]
+        .total++;
 
-      if (item.status === "BLOCKED") {
-        sectorSummary[sector].blocked++;
+      if (
+        item.status ===
+        "BLOCKED"
+      ) {
+        sectorSummary[
+          sector
+        ].blocked++;
       }
 
-      if (item.score !== null) {
-        sectorSummary[sector].scored++;
-        sectorSummary[sector].scores.push(
+      if (
+        item.score !== null
+      ) {
+        sectorSummary[
+          sector
+        ].scored++;
+
+        sectorSummary[
+          sector
+        ].scores.push(
           item.score
         );
       }
     }
 
-    for (const sector of Object.keys(
-      sectorSummary
-    )) {
+    for (
+      const sector of Object.keys(
+        sectorSummary
+      )
+    ) {
       const data =
-        sectorSummary[sector];
+        sectorSummary[
+          sector
+        ];
 
       data.average_score =
-        data.scores.length > 0
+        data.scores.length
           ? Number(
               (
                 data.scores.reduce(
-                  (a, b) => a + b,
+                  (a, b) =>
+                    a + b,
                   0
                 ) /
                 data.scores.length
@@ -669,52 +877,64 @@ export async function GET() {
     }
 
     // --------------------------------------------------------
-    // 6. Top scoring stocks
+    // 8. TOP SCORES
     // --------------------------------------------------------
 
-    const topScores = [...diagnostics]
-      .filter((x) => x.score !== null)
-      .sort(
-        (a, b) =>
-          b.score - a.score
-      )
-      .slice(0, 15);
+    const topScores =
+      diagnostics
+        .filter(
+          (x) =>
+            x.score !== null
+        )
+        .sort(
+          (a, b) =>
+            b.score -
+            a.score
+        )
+        .slice(0, 15);
 
     // --------------------------------------------------------
-    // 7. Most suspicious scores
+    // 9. CALIBRATION REVIEW
     // --------------------------------------------------------
 
-    const calibrationReview = diagnostics
-      .filter(
-        (x) =>
-          x.score !== null &&
-          (
-            x.score >= 90 ||
-            (x.score >= 85 &&
-              x.completeness !== null &&
-              x.completeness < 80) ||
-            x.flags.some(
-              (f) =>
-                f.code ===
-                  "HIGH_SCORE_LOW_CONFIDENCE" ||
-                f.code ===
-                  "BUY_WITH_PARTIAL_DATA"
+    const calibrationReview =
+      diagnostics
+        .filter(
+          (x) =>
+            x.score !== null &&
+            (
+              x.score >= 90 ||
+
+              (
+                x.score >= 85 &&
+                x.completeness !== null &&
+                x.completeness < 80
+              ) ||
+
+              x.flags.some(
+                (flag) =>
+                  flag.code ===
+                    "HIGH_SCORE_LOW_CONFIDENCE" ||
+                  flag.code ===
+                    "BUY_WITH_PARTIAL_DATA"
+              )
             )
-          )
-      )
-      .sort(
-        (a, b) =>
-          b.score - a.score
-      );
+        )
+        .sort(
+          (a, b) =>
+            b.score -
+            a.score
+        );
 
     // --------------------------------------------------------
-    // 8. Response
+    // 10. FINAL RESPONSE
     // --------------------------------------------------------
 
     return NextResponse.json({
       success: true,
 
-      engine_version: "safe_v3",
+      engine_version:
+        "safe_v3",
 
       generated_at:
         new Date().toISOString(),
@@ -729,29 +949,33 @@ export async function GET() {
         blocked:
           diagnostics.filter(
             (x) =>
-              x.status === "BLOCKED"
+              x.status ===
+              "BLOCKED"
           ).length,
 
         provisional:
           diagnostics.filter(
             (x) =>
-              x.status === "PROVISIONAL"
+              x.status ===
+              "PROVISIONAL"
           ).length,
 
         partial:
           diagnostics.filter(
             (x) =>
-              x.status === "PARTIAL"
+              x.status ===
+              "PARTIAL"
           ).length,
 
         normal:
           diagnostics.filter(
             (x) =>
-              x.status === "NORMAL"
+              x.status ===
+              "NORMAL"
           ).length,
 
         average_score:
-          avgScore,
+          averageScore,
 
         high_score_count:
           highScoreStocks.length,
