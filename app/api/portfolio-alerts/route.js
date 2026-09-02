@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_alerts_v1_1";
+const ENGINE_VERSION = "portfolio_alerts_v1_2";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 function userClient(token){return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});}
@@ -13,21 +13,38 @@ async function generateForAllUsers(){
  const [h,i,s,m]=await Promise.all([
   admin.from("holdings").select("user_id,instrument_id,current_value,invested_value,unrealized_pnl,pnl_percentage"),
   admin.from("instruments").select("id,company_name,symbol,sector"),
-  admin.from("ai_scores").select("instrument_id,total_score,action,risk_level,rating,score_breakdown,updated_at"),
+  admin.from("ai_scores").select("instrument_id,total_score,action,risk_level,rating,score_breakdown,updated_at,calculated_at").order("calculated_at",{ascending:false}),
   admin.from("market_regime_history").select("regime,score,confidence,portfolio_mode,snapshot_at").order("snapshot_at",{ascending:false}).limit(2)
  ]);
  for(const x of [h,i,s,m])if(x.error)throw new Error(x.error.message);
- const im=new Map((i.data||[]).map(x=>[x.id,x])); const sm=new Map((s.data||[]).map(x=>[x.instrument_id,x]));
+ const im=new Map((i.data||[]).map(x=>[x.id,x]));
+ const scoreHistory=new Map();
+ for(const row of (s.data||[])){
+  const list=scoreHistory.get(row.instrument_id)||[];
+  if(list.length<2)list.push(row);
+  scoreHistory.set(row.instrument_id,list);
+ }
+ const sm=new Map([...scoreHistory].map(([id,list])=>[id,list[0]]));
  const users=[...new Set((h.data||[]).map(x=>x.user_id).filter(Boolean))]; const regime=m.data?.[0]||null; const previous=m.data?.[1]||null; const alerts=[];
  for(const userId of users){
   const holdings=(h.data||[]).filter(x=>x.user_id===userId); const total=holdings.reduce((a,x)=>a+n(x.current_value),0); const sectorMap=new Map();
-  for(const x of holdings){const meta=im.get(x.instrument_id)||{};const sc=sm.get(x.instrument_id)||{};const b=sc.score_breakdown||{};const freshness=b.freshness||{};const weight=total>0?n(x.current_value)/total*100:0;const pnl=n(x.pnl_percentage);
+  for(const x of holdings){const meta=im.get(x.instrument_id)||{};const sc=sm.get(x.instrument_id)||{};const history=scoreHistory.get(x.instrument_id)||[];const prior=history[1]||null;const b=sc.score_breakdown||{};const freshness=b.freshness||{};const weight=total>0?n(x.current_value)/total*100:0;const pnl=n(x.pnl_percentage);
    if(weight>=10)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:weight>=15?"CRITICAL":"WARNING",type:"CONCENTRATION",title:`${meta.company_name||meta.symbol||"Position"} is oversized`,message:`Portfolio weight is ${weight.toFixed(1)}%, above the 10% concentration guardrail.`,dedupe_key:`CONCENTRATION:${x.instrument_id}:${Math.floor(weight)}`});
    if(String(sc.risk_level||"").toUpperCase()==="HIGH")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"HIGH_RISK",title:`${meta.company_name||meta.symbol||"Holding"} is high risk`,message:`AI risk classification is HIGH with score ${sc.total_score??"—"}.`,dedupe_key:`HIGH_RISK:${x.instrument_id}`});
    if(["MISSING","VERY_STALE","STALE"].includes(String(freshness.status||"").toUpperCase()))alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"INFO",type:"STALE_DATA",title:`${meta.company_name||meta.symbol||"Holding"} needs fresher data`,message:`Fundamental freshness is ${freshness.status||"MISSING"}; conviction is limited.`,dedupe_key:`STALE_DATA:${x.instrument_id}:${freshness.status||"MISSING"}`});
    if(String(sc.action||"").toUpperCase()==="REDUCE")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:pnl<=-20?"CRITICAL":"WARNING",type:"REDUCE_SIGNAL",title:`Review ${meta.company_name||meta.symbol||"holding"}`,message:`AI model is currently flagging REDUCE.`,dedupe_key:`REDUCE_SIGNAL:${x.instrument_id}:${Math.floor(n(sc.total_score)/5)}`});
    if(String(sc.action||"").toUpperCase()==="BUY"&&n(sc.total_score)>=85)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"INFO",type:"BUY_SIGNAL",title:`${meta.company_name||meta.symbol||"Holding"} is a strong candidate`,message:`AI score is ${n(sc.total_score).toFixed(1)} with a BUY action.`,dedupe_key:`BUY_SIGNAL:${x.instrument_id}:${Math.floor(n(sc.total_score))}`});
    if(pnl<=-15)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:pnl<=-25?"CRITICAL":"WARNING",type:"DRAWDOWN",title:`${meta.company_name||meta.symbol||"Holding"} is in drawdown`,message:`Current unrealized loss is ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN:${x.instrument_id}:${Math.floor(pnl/5)}`});
+   if(prior){
+    const currentScore=n(sc.total_score); const priorScore=n(prior.total_score); const delta=currentScore-priorScore; const name=meta.company_name||meta.symbol||"Holding";
+    if(Math.abs(delta)>=5){
+     const improving=delta>0; const magnitude=Math.abs(delta); alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:improving?"INFO":magnitude>=10?"CRITICAL":"WARNING",type:improving?"SCORE_IMPROVEMENT":"SCORE_DROP",title:`${name} AI score ${improving?"improved":"fell"}`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta>0?"+":""}${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_CHANGE:${x.instrument_id}:${priorScore.toFixed(1)}:${currentScore.toFixed(1)}`});
+    }
+    const priorRisk=String(prior.risk_level||"").toUpperCase(); const currentRisk=String(sc.risk_level||"").toUpperCase();
+    if(priorRisk&&currentRisk&&priorRisk!==currentRisk){const worsened=["HIGH","CRITICAL"].includes(currentRisk)&&!["HIGH","CRITICAL"].includes(priorRisk);alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:worsened?"CRITICAL":"WARNING",type:"RISK_CHANGE",title:`${name} risk changed ${priorRisk} → ${currentRisk}`,message:`AI risk classification moved from ${priorRisk} to ${currentRisk} since the previous scan.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${currentRisk}`});}
+    const priorAction=String(prior.action||"").toUpperCase(); const currentAction=String(sc.action||"").toUpperCase();
+    if(priorAction&&currentAction&&priorAction!==currentAction&&!["REDUCE_SIGNAL","BUY_SIGNAL"].includes(currentAction)){alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:currentAction==="REDUCE"?"WARNING":"INFO",type:"ACTION_CHANGE",title:`${name} action changed ${priorAction} → ${currentAction}`,message:`AI action moved from ${priorAction} to ${currentAction} since the previous scan.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${currentAction}`});}
+   }
    const sector=meta.sector||"OTHER"; sectorMap.set(sector,(sectorMap.get(sector)||0)+n(x.current_value));
   }
   for(const [sector,value] of sectorMap){const weight=total>0?value/total*100:0;if(weight>=30)alerts.push({user_id:userId,instrument_id:null,severity:weight>=40?"CRITICAL":"WARNING",type:"SECTOR_CONCENTRATION",title:`${sector} exposure is high`,message:`Sector exposure is ${weight.toFixed(1)}% of the portfolio.`,dedupe_key:`SECTOR_CONCENTRATION:${sector}:${Math.floor(weight)}`});}
