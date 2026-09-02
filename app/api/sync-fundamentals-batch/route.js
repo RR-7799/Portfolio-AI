@@ -9,11 +9,11 @@ import { createClient } from "@supabase/supabase-js";
 
 const BASE_URL = "https://bharatstockapi.com/v1/stocks";
 
-const ENGINE_VERSION = "fundamentals_batch_v1";
+const ENGINE_VERSION = "fundamentals_batch_v1_1";
 
 /*
 |--------------------------------------------------------------------------
-| ENV
+| ENVIRONMENT
 |--------------------------------------------------------------------------
 */
 
@@ -68,7 +68,10 @@ function numberOrNull(value) {
     : null;
 }
 
-function round(value, decimals = 2) {
+function round(
+  value,
+  decimals = 2
+) {
   const n = numberOrNull(value);
 
   if (n === null) {
@@ -155,18 +158,24 @@ function calculateGrowth(
   }
 
   return round(
-    ((currentValue -
-      previousValue) /
-      Math.abs(previousValue)) *
-      100,
+    (
+      (
+        currentValue -
+        previousValue
+      ) /
+      Math.abs(previousValue)
+    ) * 100,
     2
   );
 }
 
 /*
 |--------------------------------------------------------------------------
-| NEVER OVERWRITE GOOD DATA WITH NULL
+| PRESERVE EXISTING DATA
 |--------------------------------------------------------------------------
+|
+| Never overwrite good existing values with null.
+|
 */
 
 function preserveValue(
@@ -195,51 +204,80 @@ function preserveValue(
 async function callBharatStock(
   endpoint
 ) {
-  const response =
-    await fetch(
-      `${BASE_URL}/${endpoint}`,
-      {
-        method: "GET",
-        headers: {
-          "X-API-Key":
-            bharatStockApiKey,
-          Accept:
-            "application/json",
-        },
-        cache: "no-store",
-      }
-    );
-
-  const text =
-    await response.text();
-
-  let data;
-
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = {
-      raw_text: text,
+  if (!bharatStockApiKey) {
+    return {
+      ok: false,
+      status: 0,
+      error:
+        "BHARATSTOCK_API_KEY is missing.",
+      data: null,
     };
   }
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    data,
-    error: response.ok
-      ? null
-      : `BharatStock ${response.status}: ${
-          typeof data === "string"
-            ? data
-            : JSON.stringify(data)
-        }`,
-  };
+  try {
+    const response =
+      await fetch(
+        `${BASE_URL}/${endpoint}`,
+        {
+          method: "GET",
+          headers: {
+            "X-API-Key":
+              bharatStockApiKey,
+            Accept:
+              "application/json",
+          },
+          cache: "no-store",
+        }
+      );
+
+    const text =
+      await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = {
+        raw_text: text,
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error:
+          `BharatStock ${response.status}: ${
+            typeof data === "string"
+              ? data
+              : JSON.stringify(data)
+          }`,
+        data,
+      };
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      error: null,
+      data,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error:
+        error?.message ||
+        "Unknown BharatStock request error.",
+      data: null,
+    };
+  }
 }
 
 /*
 |--------------------------------------------------------------------------
-| FETCH INSTRUMENTS
+| GET INSTRUMENTS
 |--------------------------------------------------------------------------
 */
 
@@ -277,7 +315,7 @@ async function getInstruments({
 
 /*
 |--------------------------------------------------------------------------
-| EXISTING FUNDAMENTALS
+| GET EXISTING FUNDAMENTALS
 |--------------------------------------------------------------------------
 */
 
@@ -343,18 +381,16 @@ async function saveRecord(
 | SYNC RATIOS
 |--------------------------------------------------------------------------
 |
-| PRIORITY #1
-|
-| One BharatStock request gives us:
+| Gives:
 |
 | PE
 | PB
 | EPS
 | BVPS
-| Market Cap
-| Dividend Yield
-| 52W High
-| 52W Low
+| MARKET CAP
+| DIVIDEND YIELD
+| 52W HIGH
+| 52W LOW
 |
 */
 
@@ -477,9 +513,6 @@ async function syncRatios(
 |--------------------------------------------------------------------------
 | SYNC FINANCIALS
 |--------------------------------------------------------------------------
-|
-| PRIORITY #2
-|
 */
 
 async function syncFinancials(
@@ -537,12 +570,10 @@ async function syncFinancials(
     );
 
   const latest =
-    annuals[0] ||
-    null;
+    annuals[0] || null;
 
   const previous =
-    annuals[1] ||
-    null;
+    annuals[1] || null;
 
   if (!latest) {
     return {
@@ -590,9 +621,10 @@ async function syncFinancials(
   ) {
     calculatedROE =
       round(
-        (netProfit /
-          totalEquity) *
-          100,
+        (
+          netProfit /
+          totalEquity
+        ) * 100,
         2
       );
   }
@@ -630,9 +662,10 @@ async function syncFinancials(
     ) {
       calculatedROCE =
         round(
-          (operatingProfit /
-            capitalEmployed) *
-            100,
+          (
+            operatingProfit /
+            capitalEmployed
+          ) * 100,
           2
         );
     }
@@ -774,9 +807,6 @@ async function syncFinancials(
 |--------------------------------------------------------------------------
 | SYNC SHAREHOLDING
 |--------------------------------------------------------------------------
-|
-| PRIORITY #3
-|
 */
 
 async function syncShareholding(
@@ -935,16 +965,43 @@ function calculateCompleteness(
     ).length;
 
   return round(
-    (available /
-      fields.length) *
-      100,
+    (
+      available /
+      fields.length
+    ) * 100,
     1
   );
 }
 
 /*
 |--------------------------------------------------------------------------
-| SINGLE INSTRUMENT
+| IS MUTUAL FUND / ETF?
+|--------------------------------------------------------------------------
+*/
+
+function isFundLike(
+  instrument
+) {
+  const symbol =
+    String(
+      instrument?.symbol || ""
+    ).toUpperCase();
+
+  const sector =
+    String(
+      instrument?.sector || ""
+    ).toUpperCase();
+
+  return (
+    symbol.startsWith("INF") ||
+    sector ===
+      "MUTUAL FUNDS & ETF"
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROCESS ONE INSTRUMENT
 |--------------------------------------------------------------------------
 */
 
@@ -952,25 +1009,17 @@ async function processInstrument(
   instrument,
   type
 ) {
-  const existing =
-    await getExisting(
-      instrument.id
-    );
-
   /*
   |--------------------------------------------------------------------------
-  | FUND INSTRUMENTS
+  | Skip funds
   |--------------------------------------------------------------------------
   */
 
-  const fundLike =
-    instrument.symbol?.startsWith(
-      "INF"
-    ) ||
-    instrument.sector ===
-      "MUTUAL FUNDS & ETF";
-
-  if (fundLike) {
+  if (
+    isFundLike(
+      instrument
+    )
+  ) {
     return {
       success: true,
       skipped: true,
@@ -985,15 +1034,28 @@ async function processInstrument(
     };
   }
 
+  /*
+  |--------------------------------------------------------------------------
+  | Existing record
+  |--------------------------------------------------------------------------
+  */
+
+  const existing =
+    await getExisting(
+      instrument.id
+    );
+
   let result;
 
   /*
   |--------------------------------------------------------------------------
-  | TYPE SELECTION
+  | TYPE
   |--------------------------------------------------------------------------
   */
 
-  if (type === "ratios") {
+  if (
+    type === "ratios"
+  ) {
     result =
       await syncRatios(
         instrument,
@@ -1017,13 +1079,13 @@ async function processInstrument(
       );
   } else {
     throw new Error(
-      `Invalid type "${type}". Use ratios, financials, or shareholding.`
+      `Invalid type "${type}".`
     );
   }
 
   /*
   |--------------------------------------------------------------------------
-  | Fetch updated record
+  | Fetch updated fundamentals
   |--------------------------------------------------------------------------
   */
 
@@ -1049,6 +1111,8 @@ async function processInstrument(
     success:
       result?.success === true,
 
+    skipped: false,
+
     instrument: {
       id: instrument.id,
       symbol: instrument.symbol,
@@ -1071,7 +1135,8 @@ async function processInstrument(
           null ||
         updated?.pb_ratio !==
           null ||
-        updated?.eps !== null ||
+        updated?.eps !==
+          null ||
         updated?.book_value_per_share !==
           null
       ),
@@ -1083,23 +1148,13 @@ async function processInstrument(
 | GET
 |--------------------------------------------------------------------------
 |
-| Example:
+| Examples:
 |
 | /api/sync-fundamentals-batch?type=ratios&limit=10&offset=0
 |
-| type:
-| ratios
-| financials
-| shareholding
+| /api/sync-fundamentals-batch?type=financials&limit=10&offset=0
 |
-| limit:
-| maximum stocks to process in this request
-|
-| offset:
-| pagination offset
-|
-| dry_run=true:
-| inspect target stocks without calling BharatStock
+| /api/sync-fundamentals-batch?type=shareholding&limit=10&offset=0
 |
 |--------------------------------------------------------------------------
 */
@@ -1110,7 +1165,7 @@ export async function GET(
   try {
     /*
     |--------------------------------------------------------------------------
-    | CONFIG
+    | CONFIGURATION
     |--------------------------------------------------------------------------
     */
 
@@ -1120,11 +1175,12 @@ export async function GET(
           success: false,
           engine_version:
             ENGINE_VERSION,
-          step: "configuration",
           error:
             "Supabase client unavailable. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
         },
-        { status: 500 }
+        {
+          status: 500,
+        }
       );
     }
 
@@ -1134,11 +1190,12 @@ export async function GET(
           success: false,
           engine_version:
             ENGINE_VERSION,
-          step: "configuration",
           error:
             "BHARATSTOCK_API_KEY is missing.",
         },
-        { status: 500 }
+        {
+          status: 500,
+        }
       );
     }
 
@@ -1172,14 +1229,9 @@ export async function GET(
         ) || "0"
       );
 
-    const dryRun =
-      searchParams.get(
-        "dry_run"
-      ) === "true";
-
     /*
     |--------------------------------------------------------------------------
-    | SAFETY LIMITS
+    | Validate type
     |--------------------------------------------------------------------------
     */
 
@@ -1198,9 +1250,17 @@ export async function GET(
           error:
             "Invalid type. Use ratios, financials, or shareholding.",
         },
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Validate limit
+    |--------------------------------------------------------------------------
+    */
 
     if (
       !Number.isFinite(limit) ||
@@ -1218,12 +1278,8 @@ export async function GET(
 
     /*
     |--------------------------------------------------------------------------
-    | HARD REQUEST LIMIT
+    | Safety limits
     |--------------------------------------------------------------------------
-    |
-    | Never allow a single browser request to consume
-    | the entire BharatStock quota.
-    |
     */
 
     limit =
@@ -1237,7 +1293,7 @@ export async function GET(
 
     /*
     |--------------------------------------------------------------------------
-    | GET STOCKS
+    | GET PAGE
     |--------------------------------------------------------------------------
     */
 
@@ -1249,7 +1305,7 @@ export async function GET(
 
     /*
     |--------------------------------------------------------------------------
-    | EMPTY PAGE
+    | NO DATA
     |--------------------------------------------------------------------------
     */
 
@@ -1258,75 +1314,86 @@ export async function GET(
     ) {
       return NextResponse.json({
         success: true,
+
         engine_version:
           ENGINE_VERSION,
+
         type,
-        limit,
-        offset,
-        processed: 0,
+
+        pagination: {
+          requested_limit:
+            limit,
+          requested_offset:
+            offset,
+          instruments_returned: 0,
+        },
+
+        summary: {
+          attempted: 0,
+          successful: 0,
+          failed: 0,
+          skipped: 0,
+          rate_limited: 0,
+        },
+
+        next_offset:
+          offset,
+
+        has_more: false,
+
+        results: [],
+
         message:
           "No instruments found for this page.",
-        results: [],
       });
     }
 
     /*
     |--------------------------------------------------------------------------
-    | DRY RUN
+    | COUNTERS
     |--------------------------------------------------------------------------
     */
 
-    if (dryRun) {
-      return NextResponse.json({
-        success: true,
-        engine_version:
-          ENGINE_VERSION,
-        type,
-        limit,
-        offset,
-        dry_run: true,
-        instruments:
-          instruments.map(
-            (item) => ({
-              id: item.id,
-              symbol: item.symbol,
-              company_name:
-                item.company_name,
-              sector:
-                item.sector,
-            })
-          ),
-      });
-    }
+    let attempted = 0;
+
+    let successful = 0;
+
+    let failed = 0;
+
+    let skipped = 0;
+
+    let rateLimited = 0;
 
     /*
     |--------------------------------------------------------------------------
-    | PROCESS
+    | PROGRESS
     |--------------------------------------------------------------------------
+    |
+    | "progressed" means the item was safely completed
+    | or intentionally skipped.
+    |
+    | A failed item is NOT progressed.
+    |
+    | Therefore, when we hit 429, next_offset remains
+    | positioned at the first item that still needs work.
+    |
     */
+
+    let progressed = 0;
 
     const results = [];
 
-    let successCount = 0;
-    let failureCount = 0;
-    let rateLimitCount = 0;
-    let skippedCount = 0;
-
     /*
     |--------------------------------------------------------------------------
-    | IMPORTANT
+    | PROCESS SEQUENTIALLY
     |--------------------------------------------------------------------------
-    |
-    | Process sequentially.
-    |
-    | Do NOT use Promise.all().
-    |
-    | This avoids firing many API requests at exactly
-    | the same time.
-    |
     */
 
-    for (const instrument of instruments) {
+    for (
+      const instrument of instruments
+    ) {
+      attempted++;
+
       try {
         const result =
           await processInstrument(
@@ -1338,33 +1405,68 @@ export async function GET(
           result
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | MUTUAL FUND / ETF
+        |--------------------------------------------------------------------------
+        |
+        | Skipping is safe, so this item can be considered
+        | progressed.
+        |
+        */
+
         if (
           result.skipped
         ) {
-          skippedCount++;
+          skipped++;
+
+          progressed++;
+
           continue;
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | SUCCESS
+        |--------------------------------------------------------------------------
+        */
 
         if (
           result.success
         ) {
-          successCount++;
+          successful++;
+
+          progressed++;
         } else {
-          failureCount++;
+          /*
+          |--------------------------------------------------------------------------
+          | FAILURE
+          |--------------------------------------------------------------------------
+          */
+
+          failed++;
+
+          /*
+          |--------------------------------------------------------------------------
+          | RATE LIMIT
+          |--------------------------------------------------------------------------
+          */
 
           if (
             result.result?.status ===
               429
           ) {
-            rateLimitCount++;
+            rateLimited++;
 
             /*
             |--------------------------------------------------------------------------
-            | Stop immediately on 429.
+            | IMPORTANT
             |--------------------------------------------------------------------------
             |
-            | Once the daily quota is exhausted there is no reason
-            | to continue sending requests.
+            | Do NOT increment progressed.
+            |
+            | This means the next request will retry
+            | the exact same instrument.
             |
             */
 
@@ -1374,7 +1476,7 @@ export async function GET(
 
         /*
         |--------------------------------------------------------------------------
-        | Small delay between requests
+        | Small delay
         |--------------------------------------------------------------------------
         */
 
@@ -1386,86 +1488,178 @@ export async function GET(
             )
         );
       } catch (error) {
-        failureCount++;
+        failed++;
 
         results.push({
           success: false,
+          skipped: false,
+
           instrument: {
             id: instrument.id,
-            symbol: instrument.symbol,
+            symbol:
+              instrument.symbol,
             company_name:
               instrument.company_name,
           },
+
           type,
+
           error:
             error?.message ||
-            "Unknown error",
+            "Unknown error.",
         });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Continue after normal errors
+        |--------------------------------------------------------------------------
+        |
+        | We only stop automatically on 429.
+        |
+        */
       }
     }
 
     /*
     |--------------------------------------------------------------------------
-    | RESPONSE
+    | NEXT OFFSET
+    |--------------------------------------------------------------------------
+    |
+    | Example:
+    |
+    | offset = 0
+    |
+    | stock 0 -> success
+    | stock 1 -> success
+    | stock 2 -> 429
+    |
+    | progressed = 2
+    |
+    | next_offset = 2
+    |
+    | Therefore stock 2 will be retried next time.
+    |
+    */
+
+    const nextOffset =
+      offset + progressed;
+
+    /*
+    |--------------------------------------------------------------------------
+    | MORE DATA?
+    |--------------------------------------------------------------------------
+    |
+    | If 429 occurs, there may be more data, but we deliberately
+    | report has_more=false for this request because the API quota
+    | has stopped processing.
+    |
+    */
+
+    const hasMore =
+      rateLimited === 0 &&
+      instruments.length ===
+        limit &&
+      nextOffset <
+        offset +
+          instruments.length;
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESPONSE STATUS
     |--------------------------------------------------------------------------
     */
 
-    const completed =
-      successCount +
-      failureCount +
-      skippedCount;
+    let responseStatus = 200;
 
-    return NextResponse.json({
-      success:
-        rateLimitCount === 0,
+    if (
+      rateLimited > 0
+    ) {
+      responseStatus = 429;
+    }
 
-      engine_version:
-        ENGINE_VERSION,
+    /*
+    |--------------------------------------------------------------------------
+    | FINAL RESPONSE
+    |--------------------------------------------------------------------------
+    */
 
-      type,
-
-      pagination: {
-        requested_limit:
-          limit,
-        requested_offset:
-          offset,
-        instruments_returned:
-          instruments.length,
-        processed:
-          completed,
-      },
-
-      summary: {
+    return NextResponse.json(
+      {
         success:
-          successCount,
-        failed:
-          failureCount,
-        rate_limited:
-          rateLimitCount,
-        skipped:
-          skippedCount,
+          rateLimited === 0 &&
+          failed === 0,
+
+        engine_version:
+          ENGINE_VERSION,
+
+        type,
+
+        pagination: {
+          requested_limit:
+            limit,
+
+          requested_offset:
+            offset,
+
+          instruments_returned:
+            instruments.length,
+
+          attempted,
+
+          progressed,
+
+          next_offset:
+            nextOffset,
+        },
+
+        summary: {
+          attempted,
+
+          successful,
+
+          failed,
+
+          skipped,
+
+          rate_limited:
+            rateLimited,
+        },
+
+        resume: {
+          safe_to_resume:
+            true,
+
+          next_offset:
+            nextOffset,
+
+          retry_same_instrument:
+            rateLimited > 0,
+
+          message:
+            rateLimited > 0
+              ? "BharatStock rate limit reached. Resume from next_offset; the rate-limited instrument was not marked as completed."
+              : "Batch completed normally.",
+        },
+
+        has_more:
+          hasMore,
+
+        results,
+
+        notes: [
+          "Requests are processed sequentially.",
+          "Maximum batch size is 20.",
+          "Existing good fundamentals are preserved.",
+          "Mutual funds and ETFs are skipped.",
+          "A rate-limited instrument is never counted as completed.",
+          "Processing stops immediately after HTTP 429.",
+          "next_offset always points to the first item still requiring processing.",
+        ],
       },
-
-      next_offset:
-        offset +
-        completed,
-
-      has_more:
-        instruments.length ===
-          limit &&
-        rateLimitCount ===
-          0,
-
-      results,
-
-      notes: [
-        "Requests are processed sequentially.",
-        "Maximum batch size is 20.",
-        "Processing stops immediately after HTTP 429.",
-        "Existing good fundamentals are preserved.",
-        "Mutual funds and ETF instruments are skipped.",
-      ],
-    });
+      {
+        status: responseStatus,
+      }
+    );
   } catch (error) {
     console.error(
       "Fundamentals batch sync failed:",
@@ -1482,7 +1676,9 @@ export async function GET(
           error?.message ||
           "Unknown batch sync error.",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
