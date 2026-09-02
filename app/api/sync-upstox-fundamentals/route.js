@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "upstox_fundamentals_v1_2";
+const ENGINE_VERSION = "upstox_fundamentals_v1_3";
 
 const UPSTOX_BASE_URL = "https://api.upstox.com/v2";
 
@@ -34,21 +34,25 @@ function getUpstoxHeaders() {
 }
 
 function toNumber(value) {
-  if (value === null || value === undefined || value === "") {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return null;
   }
 
-  const number = Number(value);
+  const n = Number(value);
 
-  return Number.isFinite(number) ? number : null;
+  return Number.isFinite(n) ? n : null;
 }
 
 function firstNumber(...values) {
   for (const value of values) {
-    const number = toNumber(value);
+    const n = toNumber(value);
 
-    if (number !== null) {
-      return number;
+    if (n !== null) {
+      return n;
     }
   }
 
@@ -90,220 +94,671 @@ function calculateGrowth(current, previous) {
   );
 }
 
+/*
+  Converts:
+    Mar 2026 -> 2026-03-31
+    Jun 2026 -> 2026-06-30
+    2026-03-31 -> same
+*/
 function parsePeriodToDate(period) {
   if (!period) {
     return null;
   }
 
-  if (period instanceof Date) {
-    return period.toISOString().slice(0, 10);
-  }
-
   const value = String(period).trim();
 
-  /*
-    Already YYYY-MM-DD
-  */
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value;
   }
 
-  /*
-    Mar 2026
-    March 2026
-  */
-  const monthYear = value.match(
+  const monthMap = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  };
+
+  const match = value.match(
     /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})$/i
   );
 
-  if (monthYear) {
-    const monthMap = {
-      jan: "01",
-      feb: "02",
-      mar: "03",
-      apr: "04",
-      may: "05",
-      jun: "06",
-      jul: "07",
-      aug: "08",
-      sep: "09",
-      oct: "10",
-      nov: "11",
-      dec: "12",
-    };
-
-    const month = monthMap[monthYear[1].slice(0, 3).toLowerCase()];
-    const year = monthYear[2];
-
-    const lastDay = new Date(
-      Number(year),
-      Number(month),
-      0
-    ).getDate();
-
-    return `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+  if (!match) {
+    return null;
   }
 
-  /*
-    FY2025-26
-    2025-26
-  */
-  const financialYear = value.match(
-    /^(?:FY)?(\d{4})-(\d{2,4})$/i
-  );
+  const month =
+    monthMap[match[1].slice(0, 3).toLowerCase()];
 
-  if (financialYear) {
-    const startYear = Number(financialYear[1]);
+  const year = Number(match[2]);
 
-    return `${startYear + 1}-03-31`;
-  }
+  const lastDay = new Date(
+    year,
+    Number(month),
+    0
+  ).getDate();
 
-  return null;
+  return `${year}-${month}-${String(lastDay).padStart(
+    2,
+    "0"
+  )}`;
 }
 
-function periodSortValue(period) {
-  if (!period) {
-    return 0;
-  }
-
+function periodTimestamp(period) {
   const parsed = parsePeriodToDate(period);
 
   if (!parsed) {
     return 0;
   }
 
-  const timestamp = Date.parse(`${parsed}T00:00:00Z`);
-
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function getLatestPeriodFromArray(items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return null;
-  }
-
-  const candidates = items
-    .map((item) => {
-      const period = firstValue(
-        item?.period,
-        item?.date,
-        item?.financial_year,
-        item?.financialYear,
-        item?.fy,
-        item?.year,
-        item?.quarter,
-        item?.label
-      );
-
-      return {
-        item,
-        period,
-        sortValue: periodSortValue(period),
-      };
-    })
-    .filter((item) => item.period);
-
-  if (!candidates.length) {
-    return items[0];
-  }
-
-  candidates.sort(
-    (a, b) => b.sortValue - a.sortValue
+  const timestamp = Date.parse(
+    `${parsed}T00:00:00Z`
   );
 
-  return candidates[0].item;
+  return Number.isFinite(timestamp)
+    ? timestamp
+    : 0;
 }
 
-function findArraysDeep(value, results = [], depth = 0) {
-  if (depth > 8 || value === null || value === undefined) {
-    return results;
-  }
-
-  if (Array.isArray(value)) {
-    results.push(value);
-
-    for (const item of value) {
-      findArraysDeep(item, results, depth + 1);
-    }
-
-    return results;
-  }
-
-  if (typeof value === "object") {
-    for (const child of Object.values(value)) {
-      findArraysDeep(child, results, depth + 1);
-    }
-  }
-
-  return results;
-}
-
-function findLatestRecordDeep(value) {
-  const arrays = findArraysDeep(value);
-
-  let best = null;
-
-  for (const array of arrays) {
-    const record = getLatestPeriodFromArray(array);
-
-    if (!record || typeof record !== "object") {
-      continue;
-    }
-
-    const period = firstValue(
-      record?.period,
-      record?.date,
-      record?.financial_year,
-      record?.financialYear,
-      record?.fy,
-      record?.year,
-      record?.quarter,
-      record?.label
-    );
-
-    const score = periodSortValue(period);
-
-    if (!best || score > best.score) {
-      best = {
-        record,
-        period,
-        score,
-      };
-    }
-  }
-
-  return best;
-}
-
-function getDataObject(responseJson) {
-  if (!responseJson) {
+function latestHistoryValue(history) {
+  if (!Array.isArray(history) || !history.length) {
     return null;
   }
 
-  if (
-    responseJson?.data &&
-    typeof responseJson.data === "object"
-  ) {
-    return responseJson.data;
-  }
+  const rows = history
+    .filter(Boolean)
+    .map((row) => ({
+      row,
+      period: row?.period || null,
+      timestamp: periodTimestamp(row?.period),
+    }))
+    .sort((a, b) => b.timestamp - a.timestamp);
 
-  return responseJson;
+  return rows[0]?.row || null;
 }
 
-function getDataArray(responseJson) {
-  if (!responseJson) {
-    return [];
+function findHistoryByPeriod(history, period) {
+  if (!Array.isArray(history)) {
+    return null;
   }
 
-  if (Array.isArray(responseJson?.data)) {
-    return responseJson.data;
+  return history.find(
+    (row) => String(row?.period || "") === String(period)
+  ) || null;
+}
+
+function getResponseData(response) {
+  if (!response) {
+    return null;
   }
 
-  if (Array.isArray(responseJson)) {
-    return responseJson;
+  return response?.data ?? null;
+}
+
+/*
+  -----------------------------
+  KEY RATIOS
+  -----------------------------
+*/
+
+function parseKeyRatios(response) {
+  const rows = Array.isArray(response?.data)
+    ? response.data
+    : [];
+
+  const getCompanyValue = (names) => {
+    const row = rows.find((item) => {
+      const name = String(item?.name || "")
+        .trim()
+        .toLowerCase();
+
+      return names.some((candidate) =>
+        name === candidate
+      );
+    });
+
+    return firstNumber(
+      row?.company_value,
+      row?.value
+    );
+  };
+
+  return {
+    pe: getCompanyValue([
+      "p/e",
+      "pe",
+      "p/e ratio",
+    ]),
+
+    pb: getCompanyValue([
+      "p/b",
+      "pb",
+      "p/b ratio",
+    ]),
+
+    roa: getCompanyValue([
+      "roa",
+      "return on assets",
+    ]),
+
+    roe: getCompanyValue([
+      "roe",
+      "return on equity",
+    ]),
+
+    roce: getCompanyValue([
+      "roce",
+      "return on capital employed",
+    ]),
+
+    ev_ebitda: getCompanyValue([
+      "ev/ebitda",
+      "ev / ebitda",
+      "enterprise value/ebitda",
+    ]),
+  };
+}
+
+/*
+  -----------------------------
+  INCOME STATEMENT
+  -----------------------------
+*/
+
+function parseIncomeStatement(response) {
+  const data = getResponseData(response);
+
+  const rows = Array.isArray(
+    data?.income_statement
+  )
+    ? data.income_statement
+    : [];
+
+  function getCategory(categoryNames) {
+    return rows.find((row) =>
+      categoryNames.some(
+        (name) =>
+          String(row?.category || "")
+            .trim()
+            .toLowerCase() === name
+      )
+    );
   }
 
-  return [];
+  const revenueRow = getCategory([
+    "revenue",
+    "sales",
+    "net_sales",
+    "total_revenue",
+  ]);
+
+  const operatingProfitRow = getCategory([
+    "operating_profit",
+    "operating profit",
+    "profit_from_operations",
+  ]);
+
+  const netProfitRow = getCategory([
+    "net_profit",
+    "net profit",
+    "profit_after_tax",
+    "profit after tax",
+  ]);
+
+  const revenueHistory = Array.isArray(
+    revenueRow?.history
+  )
+    ? revenueRow.history
+    : [];
+
+  const operatingProfitHistory = Array.isArray(
+    operatingProfitRow?.history
+  )
+    ? operatingProfitRow.history
+    : [];
+
+  const netProfitHistory = Array.isArray(
+    netProfitRow?.history
+  )
+    ? netProfitRow.history
+    : [];
+
+  const latestRevenue =
+    latestHistoryValue(revenueHistory);
+
+  const latestOperatingProfit =
+    latestHistoryValue(
+      operatingProfitHistory
+    );
+
+  const latestNetProfit =
+    latestHistoryValue(netProfitHistory);
+
+  /*
+    The income statement itself contains the correct
+    historical periods. We explicitly use the latest
+    revenue period as the canonical financial period.
+  */
+  const latestPeriod =
+    latestRevenue?.period ||
+    latestOperatingProfit?.period ||
+    latestNetProfit?.period ||
+    null;
+
+  const previousRevenue =
+    revenueHistory
+      .filter(
+        (row) =>
+          row?.period &&
+          row.period !== latestPeriod
+      )
+      .sort(
+        (a, b) =>
+          periodTimestamp(b.period) -
+          periodTimestamp(a.period)
+      )[0] || null;
+
+  const previousNetProfit =
+    netProfitHistory
+      .filter(
+        (row) =>
+          row?.period &&
+          row.period !== latestPeriod
+      )
+      .sort(
+        (a, b) =>
+          periodTimestamp(b.period) -
+          periodTimestamp(a.period)
+      )[0] || null;
+
+  const revenueLatest = toNumber(
+    latestRevenue?.value
+  );
+
+  const revenuePrevious = toNumber(
+    previousRevenue?.value
+  );
+
+  const operatingProfitLatest =
+    toNumber(latestOperatingProfit?.value);
+
+  const netProfitLatest =
+    toNumber(latestNetProfit?.value);
+
+  const netProfitPrevious =
+    toNumber(previousNetProfit?.value);
+
+  /*
+    Prefer Upstox's stated change percentage when
+    available. Otherwise calculate it.
+  */
+  const salesGrowthFromProvider =
+    latestRevenue?.change !== undefined
+      ? toNumber(
+          String(latestRevenue.change)
+            .replace("%", "")
+      )
+      : null;
+
+  const profitGrowthFromProvider =
+    latestNetProfit?.change !== undefined
+      ? toNumber(
+          String(latestNetProfit.change)
+            .replace("%", "")
+      )
+      : null;
+
+  return {
+    latest_period: latestPeriod,
+
+    previous_period:
+      previousRevenue?.period ||
+      previousNetProfit?.period ||
+      null,
+
+    revenue_latest: revenueLatest,
+
+    revenue_previous: revenuePrevious,
+
+    operating_profit_latest:
+      operatingProfitLatest,
+
+    net_profit_latest:
+      netProfitLatest,
+
+    net_profit_previous:
+      netProfitPrevious,
+
+    sales_growth:
+      salesGrowthFromProvider ??
+      calculateGrowth(
+        revenueLatest,
+        revenuePrevious
+      ),
+
+    profit_growth:
+      profitGrowthFromProvider ??
+      calculateGrowth(
+        netProfitLatest,
+        netProfitPrevious
+      ),
+  };
+}
+
+/*
+  -----------------------------
+  BALANCE SHEET
+  -----------------------------
+*/
+
+function parseBalanceSheet(response) {
+  const data = getResponseData(response);
+
+  const history = Array.isArray(
+    data?.history
+  )
+    ? data.history
+    : [];
+
+  const latest = latestHistoryValue(history);
+
+  return {
+    total_assets: firstNumber(
+      latest?.total_asset,
+      latest?.total_assets
+    ),
+
+    total_liabilities: firstNumber(
+      latest?.total_liability,
+      latest?.total_liabilities
+    ),
+
+    /*
+      IMPORTANT:
+      Do not calculate D/E from total liabilities.
+      Total liabilities are not the same as debt.
+
+      If Upstox eventually supplies a direct D/E
+      field, we can use it.
+    */
+    debt_to_equity: firstNumber(
+      latest?.debt_to_equity,
+      latest?.debtEquity,
+      latest?.debt_to_equity_ratio
+    ),
+
+    period: latest?.period || null,
+  };
+}
+
+/*
+  -----------------------------
+  CASH FLOW
+  -----------------------------
+*/
+
+function parseCashFlow(response) {
+  const data = getResponseData(response);
+
+  const categories = Array.isArray(
+    data?.cash_flow
+  )
+    ? data.cash_flow
+    : [];
+
+  function findCategory(names) {
+    return categories.find((row) =>
+      names.some(
+        (name) =>
+          String(row?.category || "")
+            .trim()
+            .toLowerCase() === name
+      )
+    );
+  }
+
+  const operating = findCategory([
+    "operating",
+    "operating cash flow",
+  ]);
+
+  const investing = findCategory([
+    "investing",
+    "investing cash flow",
+  ]);
+
+  const financing = findCategory([
+    "financing",
+    "financing cash flow",
+  ]);
+
+  const operatingLatest =
+    latestHistoryValue(
+      operating?.history
+    );
+
+  const investingLatest =
+    latestHistoryValue(
+      investing?.history
+    );
+
+  const financingLatest =
+    latestHistoryValue(
+      financing?.history
+    );
+
+  /*
+    Use operating CF period as the canonical cash-flow
+    period. All categories should normally line up.
+  */
+  const period =
+    operatingLatest?.period ||
+    investingLatest?.period ||
+    financingLatest?.period ||
+    null;
+
+  return {
+    operating: toNumber(
+      operatingLatest?.value
+    ),
+
+    investing: toNumber(
+      investingLatest?.value
+    ),
+
+    financing: toNumber(
+      financingLatest?.value
+    ),
+
+    period,
+  };
+}
+
+/*
+  -----------------------------
+  SHAREHOLDING
+  -----------------------------
+*/
+
+function parseShareholding(response) {
+  const rows = Array.isArray(response?.data)
+    ? response.data
+    : [];
+
+  function findCategory(names) {
+    return rows.find((row) =>
+      names.some(
+        (name) =>
+          String(row?.category || "")
+            .trim()
+            .toLowerCase() === name
+      )
+    );
+  }
+
+  function latestCategoryValue(names) {
+    const row = findCategory(names);
+
+    const latest = latestHistoryValue(
+      row?.history
+    );
+
+    return {
+      value: toNumber(latest?.value),
+      period: latest?.period || null,
+    };
+  }
+
+  const promoter = latestCategoryValue([
+    "promoters",
+    "promoter",
+  ]);
+
+  const fii = latestCategoryValue([
+    "fii",
+    "foreign_institutional_investors",
+  ]);
+
+  const otherDii = latestCategoryValue([
+    "other_dii",
+    "other dii",
+  ]);
+
+  const retail = latestCategoryValue([
+    "retail_and_other",
+    "retail and other",
+    "public",
+  ]);
+
+  const mutualFunds = latestCategoryValue([
+    "mutual_funds",
+    "mutual funds",
+  ]);
+
+  /*
+    Upstox may provide DII as an aggregate in some
+    responses or only "other_dii" and mutual funds.
+
+    We preserve a real DII value where supplied.
+    Otherwise we use other_dii + mutual_funds as the
+    compatibility value expected by our current model.
+  */
+  const directDii = latestCategoryValue([
+    "dii",
+    "domestic_institutional_investors",
+  ]);
+
+  let dii = directDii.value;
+
+  if (
+    dii === null &&
+    (
+      otherDii.value !== null ||
+      mutualFunds.value !== null
+    )
+  ) {
+    dii = Number(
+      (
+        (otherDii.value || 0) +
+        (mutualFunds.value || 0)
+      ).toFixed(2)
+    );
+  }
+
+  const periods = [
+    promoter.period,
+    fii.period,
+    directDii.period,
+    otherDii.period,
+    mutualFunds.period,
+    retail.period,
+  ].filter(Boolean);
+
+  periods.sort(
+    (a, b) =>
+      periodTimestamp(b) -
+      periodTimestamp(a)
+  );
+
+  return {
+    promoter: promoter.value,
+
+    fii: fii.value,
+
+    dii,
+
+    direct_dii: directDii.value,
+
+    other_dii: otherDii.value,
+
+    mutual_funds: mutualFunds.value,
+
+    public: retail.value,
+
+    raw_period: periods[0] || null,
+  };
+}
+
+/*
+  -----------------------------
+  DATABASE MERGE
+  -----------------------------
+*/
+
+function mergeValue(newValue, existingValue) {
+  /*
+    Never replace a valid existing value with null.
+  */
+  return newValue !== null &&
+    newValue !== undefined
+    ? newValue
+    : existingValue ?? null;
+}
+
+function calculateCompleteness(record) {
+  const fields = [
+    "sales_growth",
+    "profit_growth",
+    "roe",
+    "roce",
+    "debt_to_equity",
+    "operating_cash_flow",
+    "promoter_holding",
+    "fii_holding",
+    "dii_holding",
+    "market_cap",
+    "pe_ratio",
+    "pb_ratio",
+    "book_value_per_share",
+    "eps",
+    "dividend_yield",
+    "week_52_high",
+    "week_52_low",
+  ];
+
+  const availableFields = fields.filter(
+    (field) =>
+      record?.[field] !== null &&
+      record?.[field] !== undefined
+  );
+
+  return {
+    availableFields,
+    completeness: Number(
+      (
+        (availableFields.length /
+          fields.length) *
+        100
+      ).toFixed(1)
+    ),
+  };
 }
 
 async function upstoxGet(endpoint) {
@@ -332,8 +787,11 @@ async function upstoxGet(endpoint) {
     return {
       ok: response.ok,
       status: response.status,
-      duration_ms: Date.now() - startedAt,
+      duration_ms:
+        Date.now() - startedAt,
+
       data: json,
+
       error: response.ok
         ? null
         : (
@@ -346,452 +804,74 @@ async function upstoxGet(endpoint) {
     return {
       ok: false,
       status: null,
-      duration_ms: Date.now() - startedAt,
+      duration_ms:
+        Date.now() - startedAt,
+
       data: null,
-      error: error?.message || "Upstox request failed",
+
+      error:
+        error?.message ||
+        "Upstox request failed",
     };
   }
-}
-
-function parseRatios(response) {
-  const data = getDataObject(response);
-
-  return {
-    pe: firstNumber(
-      data?.pe,
-      data?.pe_ratio,
-      data?.price_to_earnings
-    ),
-
-    pb: firstNumber(
-      data?.pb,
-      data?.pb_ratio,
-      data?.price_to_book
-    ),
-
-    roe: firstNumber(
-      data?.roe,
-      data?.return_on_equity
-    ),
-
-    roce: firstNumber(
-      data?.roce,
-      data?.return_on_capital_employed
-    ),
-
-    roa: firstNumber(
-      data?.roa,
-      data?.return_on_assets
-    ),
-
-    ev_ebitda: firstNumber(
-      data?.ev_ebitda,
-      data?.evToEbitda,
-      data?.enterprise_value_to_ebitda
-    ),
-  };
-}
-
-function parseIncomeStatement(response) {
-  const data = getDataObject(response);
-
-  const latest = findLatestRecordDeep(data);
-
-  let latestRecord = latest?.record || null;
-  let latestPeriod = latest?.period || null;
-
-  /*
-    Fallback for common Upstox structure.
-  */
-  if (!latestRecord) {
-    const arrays = findArraysDeep(data);
-
-    for (const array of arrays) {
-      if (!array.length) continue;
-
-      const candidate = getLatestPeriodFromArray(array);
-
-      if (candidate && typeof candidate === "object") {
-        latestRecord = candidate;
-
-        latestPeriod = firstValue(
-          candidate?.period,
-          candidate?.date,
-          candidate?.financial_year,
-          candidate?.financialYear,
-          candidate?.fy,
-          candidate?.year,
-          candidate?.label
-        );
-
-        break;
-      }
-    }
-  }
-
-  const allRecords = findArraysDeep(data)
-    .flat()
-    .filter(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        (
-          item?.period ||
-          item?.date ||
-          item?.financial_year ||
-          item?.financialYear ||
-          item?.fy ||
-          item?.year
-        )
-    );
-
-  const uniqueRecords = Array.from(
-    new Map(
-      allRecords.map((item) => [
-        JSON.stringify(item),
-        item,
-      ])
-    ).values()
-  );
-
-  uniqueRecords.sort(
-    (a, b) =>
-      periodSortValue(
-        firstValue(
-          b?.period,
-          b?.date,
-          b?.financial_year,
-          b?.financialYear,
-          b?.fy,
-          b?.year,
-          b?.label
-        )
-      ) -
-      periodSortValue(
-        firstValue(
-          a?.period,
-          a?.date,
-          a?.financial_year,
-          a?.financialYear,
-          a?.fy,
-          a?.year,
-          a?.label
-        )
-      )
-  );
-
-  const current = latestRecord;
-  const latestIndex = uniqueRecords.findIndex(
-    (item) => JSON.stringify(item) === JSON.stringify(current)
-  );
-
-  const previous =
-    uniqueRecords.find(
-      (_, index) =>
-        index > latestIndex &&
-        JSON.stringify(_) !== JSON.stringify(current)
-    ) || uniqueRecords[1] || null;
-
-  const revenueLatest = firstNumber(
-    current?.revenue,
-    current?.revenue_from_operations,
-    current?.total_revenue,
-    current?.sales,
-    current?.net_sales
-  );
-
-  const revenuePrevious = firstNumber(
-    previous?.revenue,
-    previous?.revenue_from_operations,
-    previous?.total_revenue,
-    previous?.sales,
-    previous?.net_sales
-  );
-
-  const operatingProfitLatest = firstNumber(
-    current?.operating_profit,
-    current?.operatingProfit,
-    current?.profit_from_operations
-  );
-
-  const netProfitLatest = firstNumber(
-    current?.net_profit,
-    current?.netProfit,
-    current?.profit_after_tax,
-    current?.profit_after_tax_pat
-  );
-
-  const netProfitPrevious = firstNumber(
-    previous?.net_profit,
-    previous?.netProfit,
-    previous?.profit_after_tax,
-    previous?.profit_after_tax_pat
-  );
-
-  return {
-    latest_period: firstValue(
-      current?.period,
-      current?.date,
-      current?.financial_year,
-      current?.financialYear,
-      current?.fy,
-      current?.year,
-      current?.label,
-      latestPeriod
-    ),
-
-    previous_period: firstValue(
-      previous?.period,
-      previous?.date,
-      previous?.financial_year,
-      previous?.financialYear,
-      previous?.fy,
-      previous?.year,
-      previous?.label
-    ),
-
-    revenue_latest: revenueLatest,
-    revenue_previous: revenuePrevious,
-
-    operating_profit_latest: operatingProfitLatest,
-
-    net_profit_latest: netProfitLatest,
-    net_profit_previous: netProfitPrevious,
-
-    sales_growth: calculateGrowth(
-      revenueLatest,
-      revenuePrevious
-    ),
-
-    profit_growth: calculateGrowth(
-      netProfitLatest,
-      netProfitPrevious
-    ),
-  };
-}
-
-function parseBalanceSheet(response) {
-  const data = getDataObject(response);
-
-  const latest = findLatestRecordDeep(data);
-
-  const current = latest?.record || {};
-
-  const totalAssets = firstNumber(
-    current?.total_assets,
-    current?.totalAssets,
-    current?.assets
-  );
-
-  const totalLiabilities = firstNumber(
-    current?.total_liabilities,
-    current?.totalLiabilities,
-    current?.liabilities
-  );
-
-  const explicitDebtToEquity = firstNumber(
-    current?.debt_to_equity,
-    current?.debtEquity,
-    current?.debt_to_equity_ratio
-  );
-
-  return {
-    total_assets: totalAssets,
-    total_liabilities: totalLiabilities,
-
-    /*
-      Never manufacture D/E from total liabilities.
-
-      If Upstox gives D/E directly, use it.
-      Otherwise retain null and let the DB/scorer decide.
-    */
-    debt_to_equity: explicitDebtToEquity,
-
-    period: firstValue(
-      current?.period,
-      current?.date,
-      current?.financial_year,
-      current?.financialYear,
-      current?.fy,
-      current?.year,
-      current?.label,
-      latest?.period
-    ),
-  };
-}
-
-function parseCashFlow(response) {
-  const data = getDataObject(response);
-
-  const latest = findLatestRecordDeep(data);
-
-  const current = latest?.record || {};
-
-  return {
-    operating: firstNumber(
-      current?.operating_cash_flow,
-      current?.operatingCashFlow,
-      current?.cash_flow_from_operating_activities,
-      current?.operating_activities
-    ),
-
-    investing: firstNumber(
-      current?.investing_cash_flow,
-      current?.investingCashFlow,
-      current?.cash_flow_from_investing_activities,
-      current?.investing_activities
-    ),
-
-    financing: firstNumber(
-      current?.financing_cash_flow,
-      current?.financingCashFlow,
-      current?.cash_flow_from_financing_activities,
-      current?.financing_activities
-    ),
-
-    period: firstValue(
-      current?.period,
-      current?.date,
-      current?.financial_year,
-      current?.financialYear,
-      current?.fy,
-      current?.year,
-      current?.label,
-      latest?.period
-    ),
-  };
-}
-
-function parseShareholding(response) {
-  const rows = getDataArray(response);
-
-  const latest = getLatestPeriodFromArray(rows);
-
-  const current = latest || rows[0] || {};
-
-  return {
-    promoter: firstNumber(
-      current?.promoter,
-      current?.promoter_holding,
-      current?.promoters
-    ),
-
-    fii: firstNumber(
-      current?.fii,
-      current?.fii_holding,
-      current?.foreign_institutional_investors
-    ),
-
-    dii: firstNumber(
-      current?.dii,
-      current?.dii_holding,
-      current?.domestic_institutional_investors
-    ),
-
-    other_dii: firstNumber(
-      current?.other_dii,
-      current?.otherDii
-    ),
-
-    mutual_funds: firstNumber(
-      current?.mutual_funds,
-      current?.mutualFunds
-    ),
-
-    public: firstNumber(
-      current?.public,
-      current?.public_holding,
-      current?.retail_and_other
-    ),
-
-    raw_period: firstValue(
-      current?.period,
-      current?.date,
-      current?.quarter,
-      current?.financial_year,
-      current?.financialYear,
-      current?.label
-    ),
-  };
-}
-
-function countFields(record) {
-  const fields = [
-    "sales_growth",
-    "profit_growth",
-    "roe",
-    "roce",
-    "debt_to_equity",
-    "operating_cash_flow",
-    "promoter_holding",
-    "fii_holding",
-    "dii_holding",
-    "market_cap",
-    "pe_ratio",
-    "pb_ratio",
-    "book_value_per_share",
-    "eps",
-    "dividend_yield",
-    "week_52_high",
-    "week_52_low",
-  ];
-
-  const available = fields.filter(
-    (field) =>
-      record?.[field] !== null &&
-      record?.[field] !== undefined
-  );
-
-  return {
-    available,
-    completeness: Number(
-      ((available.length / fields.length) * 100).toFixed(1)
-    ),
-  };
 }
 
 export async function GET(request) {
   try {
     const supabase = getSupabase();
 
-    const { searchParams } = new URL(request.url);
+    const { searchParams } =
+      new URL(request.url);
 
-    const requestedIsin =
-      searchParams.get("isin")?.trim().toUpperCase();
+    const isin =
+      searchParams
+        .get("isin")
+        ?.trim()
+        .toUpperCase();
 
-    if (!requestedIsin) {
+    if (!isin) {
       return Response.json(
         {
           success: false,
-          engine_version: ENGINE_VERSION,
-          error: "Missing isin parameter",
+          engine_version:
+            ENGINE_VERSION,
+          error:
+            "Missing isin parameter",
         },
         { status: 400 }
       );
     }
 
-    const isIsin =
-      /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(requestedIsin);
+    const validIsin =
+      /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(
+        isin
+      );
 
-    if (!isIsin) {
+    if (!validIsin) {
       return Response.json(
         {
           success: false,
-          engine_version: ENGINE_VERSION,
+          engine_version:
+            ENGINE_VERSION,
           error: "Invalid ISIN",
         },
         { status: 400 }
       );
     }
 
-    const { data: instrument, error: instrumentError } =
-      await supabase
-        .from("instruments")
-        .select(
-          "id,symbol,company_name,sector"
-        )
-        .eq("symbol", requestedIsin)
-        .maybeSingle();
+    /*
+      Locate instrument by ISIN stored in symbol.
+    */
+    const {
+      data: instrument,
+      error: instrumentError,
+    } = await supabase
+      .from("instruments")
+      .select(
+        "id,symbol,company_name,sector"
+      )
+      .eq("symbol", isin)
+      .maybeSingle();
 
     if (instrumentError) {
       throw new Error(
@@ -803,164 +883,231 @@ export async function GET(request) {
       return Response.json(
         {
           success: false,
-          engine_version: ENGINE_VERSION,
-          error: `Instrument not found for ISIN ${requestedIsin}`,
+          engine_version:
+            ENGINE_VERSION,
+          error:
+            `Instrument not found for ISIN ${isin}`,
         },
         { status: 404 }
       );
     }
 
-    const endpoints = {};
+    /*
+      Load all required Upstox endpoints.
+    */
+    const profile =
+      await upstoxGet(
+        `/fundamentals/${isin}/profile`
+      );
 
-    endpoints.profile = await upstoxGet(
-      `/fundamentals/${requestedIsin}/profile`
+    const keyRatios =
+      await upstoxGet(
+        `/fundamentals/${isin}/key-ratios`
+      );
+
+    const balanceSheet =
+      await upstoxGet(
+        `/fundamentals/${isin}/balance-sheet?type=consolidated&fs=true`
+      );
+
+    const cashFlow =
+      await upstoxGet(
+        `/fundamentals/${isin}/cash-flow?type=consolidated&fs=true`
+      );
+
+    const incomeStatement =
+      await upstoxGet(
+        `/fundamentals/${isin}/income-statement?type=consolidated&time_period=yearly&fs=true`
+      );
+
+    const shareHoldings =
+      await upstoxGet(
+        `/fundamentals/${isin}/share-holdings`
+      );
+
+    const endpointStatus = {
+      profile: {
+        ok: profile.ok,
+        status: profile.status,
+        error: profile.error,
+      },
+
+      key_ratios: {
+        ok: keyRatios.ok,
+        status: keyRatios.status,
+        error: keyRatios.error,
+      },
+
+      balance_sheet: {
+        ok: balanceSheet.ok,
+        status:
+          balanceSheet.status,
+        error: balanceSheet.error,
+      },
+
+      cash_flow: {
+        ok: cashFlow.ok,
+        status: cashFlow.status,
+        error: cashFlow.error,
+      },
+
+      income_statement: {
+        ok: incomeStatement.ok,
+        status:
+          incomeStatement.status,
+        error:
+          incomeStatement.error,
+      },
+
+      share_holdings: {
+        ok: shareHoldings.ok,
+        status:
+          shareHoldings.status,
+        error:
+          shareHoldings.error,
+      },
+    };
+
+    /*
+      Parse direct Upstox structures.
+    */
+    const ratios = parseKeyRatios(
+      keyRatios.data
     );
 
-    endpoints.key_ratios = await upstoxGet(
-      `/fundamentals/${requestedIsin}/key-ratios`
+    const income = parseIncomeStatement(
+      incomeStatement.data
     );
 
-    endpoints.balance_sheet = await upstoxGet(
-      `/fundamentals/${requestedIsin}/balance-sheet?type=consolidated&fs=true`
+    const balance = parseBalanceSheet(
+      balanceSheet.data
     );
 
-    endpoints.cash_flow = await upstoxGet(
-      `/fundamentals/${requestedIsin}/cash-flow?type=consolidated&fs=true`
-    );
-
-    endpoints.income_statement = await upstoxGet(
-      `/fundamentals/${requestedIsin}/income-statement?type=consolidated&time_period=yearly&fs=true`
-    );
-
-    endpoints.share_holdings = await upstoxGet(
-      `/fundamentals/${requestedIsin}/share-holdings`
-    );
-
-    const endpointStatus = {};
-
-    for (const [name, endpoint] of Object.entries(
-      endpoints
-    )) {
-      endpointStatus[name] = {
-        ok: endpoint.ok,
-        status: endpoint.status,
-        error: endpoint.error,
-      };
-    }
-
-    const ratios = parseRatios(
-      endpoints.key_ratios.data
-    );
-
-    const incomeStatement = parseIncomeStatement(
-      endpoints.income_statement.data
-    );
-
-    const balanceSheet = parseBalanceSheet(
-      endpoints.balance_sheet.data
-    );
-
-    const cashFlow = parseCashFlow(
-      endpoints.cash_flow.data
+    const cash = parseCashFlow(
+      cashFlow.data
     );
 
     const ownership = parseShareholding(
-      endpoints.share_holdings.data
+      shareHoldings.data
     );
 
-    /*
-      Preserve the company's existing market cap and
-      other good fields in Supabase when Upstox does not
-      provide them on the fundamentals response.
-
-      This prevents a successful sync from degrading an
-      already populated record.
-    */
-    const { data: existingFundamentals } =
-      await supabase
-        .from("fundamentals")
-        .select("*")
-        .eq("instrument_id", instrument.id)
-        .maybeSingle();
-
     const profileData =
-      getDataObject(endpoints.profile.data);
+      getResponseData(profile.data);
 
-    const existing = existingFundamentals || {};
+    /*
+      Fetch existing fundamentals so that
+      unavailable Upstox values NEVER erase good data.
+    */
+    const {
+      data: existingFundamentals,
+      error: existingError,
+    } = await supabase
+      .from("fundamentals")
+      .select("*")
+      .eq(
+        "instrument_id",
+        instrument.id
+      )
+      .maybeSingle();
 
+    if (existingError) {
+      throw new Error(
+        `Failed to load existing fundamentals: ${existingError.message}`
+      );
+    }
+
+    const existing =
+      existingFundamentals || {};
+
+    /*
+      Build merged database record.
+    */
     const merged = {
-      instrument_id: instrument.id,
+      instrument_id:
+        instrument.id,
 
       sales_growth:
-        incomeStatement.sales_growth ??
-        existing.sales_growth ??
-        null,
+        mergeValue(
+          income.sales_growth,
+          existing.sales_growth
+        ),
 
       profit_growth:
-        incomeStatement.profit_growth ??
-        existing.profit_growth ??
-        null,
+        mergeValue(
+          income.profit_growth,
+          existing.profit_growth
+        ),
 
       roe:
-        ratios.roe ??
-        existing.roe ??
-        null,
+        mergeValue(
+          ratios.roe,
+          existing.roe
+        ),
 
       roce:
-        ratios.roce ??
-        existing.roce ??
-        null,
+        mergeValue(
+          ratios.roce,
+          existing.roce
+        ),
 
       debt_to_equity:
-        balanceSheet.debt_to_equity ??
-        existing.debt_to_equity ??
-        null,
+        mergeValue(
+          balance.debt_to_equity,
+          existing.debt_to_equity
+        ),
 
       operating_cash_flow:
-        cashFlow.operating ??
-        existing.operating_cash_flow ??
-        null,
+        mergeValue(
+          cash.operating,
+          existing.operating_cash_flow
+        ),
 
       promoter_holding:
-        ownership.promoter ??
-        existing.promoter_holding ??
-        null,
+        mergeValue(
+          ownership.promoter,
+          existing.promoter_holding
+        ),
 
       fii_holding:
-        ownership.fii ??
-        existing.fii_holding ??
-        null,
+        mergeValue(
+          ownership.fii,
+          existing.fii_holding
+        ),
+
+      dii_holding:
+        mergeValue(
+          ownership.dii,
+          existing.dii_holding
+        ),
 
       /*
-        Compatibility mapping used by our existing scorer.
-      */
-      dii_holding:
-        ownership.dii !== null &&
-        ownership.dii !== undefined
-          ? ownership.dii
-          : existing.dii_holding ?? null,
+        Upstox fundamentals does not reliably expose
+        company market cap/EPS/BVPS/52-week data in
+        this endpoint.
 
+        Preserve existing values.
+      */
       market_cap:
-        existing.market_cap ??
-        null,
+        existing.market_cap ?? null,
 
       pe_ratio:
-        ratios.pe ??
-        existing.pe_ratio ??
-        null,
+        mergeValue(
+          ratios.pe,
+          existing.pe_ratio
+        ),
 
       pb_ratio:
-        ratios.pb ??
-        existing.pb_ratio ??
-        null,
+        mergeValue(
+          ratios.pb,
+          existing.pb_ratio
+        ),
 
       book_value_per_share:
         existing.book_value_per_share ??
         null,
 
       eps:
-        existing.eps ??
-        null,
+        existing.eps ?? null,
 
       dividend_yield:
         existing.dividend_yield ??
@@ -975,7 +1122,7 @@ export async function GET(request) {
         null,
 
       financial_year:
-        incomeStatement.latest_period ??
+        income.latest_period ??
         existing.financial_year ??
         null,
 
@@ -986,22 +1133,34 @@ export async function GET(request) {
         existing.shareholding_date ??
         null,
 
-      updated_at: new Date().toISOString(),
+      updated_at:
+        new Date().toISOString(),
     };
 
-    const completeness = countFields(merged);
+    /*
+      IMPORTANT:
+      Do not overwrite the manually classified sector.
+      Upstox profile sector is informational only.
+    */
+    const completeness =
+      calculateCompleteness(
+        merged
+      );
 
-    const { data: savedFundamentals, error: saveError } =
-      await supabase
-        .from("fundamentals")
-        .upsert(
-          merged,
-          {
-            onConflict: "instrument_id",
-          }
-        )
-        .select()
-        .single();
+    const {
+      data: saved,
+      error: saveError,
+    } = await supabase
+      .from("fundamentals")
+      .upsert(
+        merged,
+        {
+          onConflict:
+            "instrument_id",
+        }
+      )
+      .select()
+      .single();
 
     if (saveError) {
       throw new Error(
@@ -1009,20 +1168,60 @@ export async function GET(request) {
       );
     }
 
+    /*
+      Financial-period consistency check.
+    */
+    const incomePeriod =
+      income.latest_period;
+
+    const balancePeriod =
+      balance.period;
+
+    const cashPeriod =
+      cash.period;
+
+    const incomeDate =
+      parsePeriodToDate(
+        incomePeriod
+      );
+
+    const balanceDate =
+      parsePeriodToDate(
+        balancePeriod
+      );
+
+    const cashDate =
+      parsePeriodToDate(
+        cashPeriod
+      );
+
+    const periodsAligned =
+      Boolean(
+        incomeDate &&
+        balanceDate &&
+        cashDate &&
+        incomeDate === balanceDate &&
+        incomeDate === cashDate
+      );
+
     return Response.json({
       success: true,
-      engine_version: ENGINE_VERSION,
+
+      engine_version:
+        ENGINE_VERSION,
 
       instrument: {
         id: instrument.id,
         symbol: instrument.symbol,
-        company_name: instrument.company_name,
+        company_name:
+          instrument.company_name,
         sector: instrument.sector,
       },
 
       provider: "Upstox",
 
-      endpoint_status: endpointStatus,
+      endpoint_status:
+        endpointStatus,
 
       profile: {
         sector:
@@ -1036,23 +1235,41 @@ export async function GET(request) {
         roe: ratios.roe,
         roce: ratios.roce,
         roa: ratios.roa,
-        ev_ebitda: ratios.ev_ebitda,
+        ev_ebitda:
+          ratios.ev_ebitda,
       },
 
-      income_statement: incomeStatement,
+      income_statement: income,
 
-      balance_sheet: balanceSheet,
+      balance_sheet: balance,
 
-      cash_flow: cashFlow,
+      cash_flow: cash,
 
       ownership: {
-        promoter: ownership.promoter,
-        fii: ownership.fii,
-        dii: ownership.dii,
-        other_dii: ownership.other_dii,
-        mutual_funds: ownership.mutual_funds,
-        public: ownership.public,
-        raw_period: ownership.raw_period,
+        promoter:
+          ownership.promoter,
+
+        fii:
+          ownership.fii,
+
+        dii:
+          ownership.dii,
+
+        direct_dii:
+          ownership.direct_dii,
+
+        other_dii:
+          ownership.other_dii,
+
+        mutual_funds:
+          ownership.mutual_funds,
+
+        public:
+          ownership.public,
+
+        raw_period:
+          ownership.raw_period,
+
         database_date:
           parsePeriodToDate(
             ownership.raw_period
@@ -1060,43 +1277,62 @@ export async function GET(request) {
       },
 
       valuation: {
-        market_cap: merged.market_cap,
-        pe: merged.pe_ratio,
-        pb: merged.pb_ratio,
-        eps: merged.eps,
+        market_cap:
+          merged.market_cap,
+
+        pe:
+          merged.pe_ratio,
+
+        pb:
+          merged.pb_ratio,
+
+        eps:
+          merged.eps,
+
         book_value_per_share:
           merged.book_value_per_share,
+
         dividend_yield:
           merged.dividend_yield,
+
         week_52_high:
           merged.week_52_high,
+
         week_52_low:
           merged.week_52_low,
       },
 
       financial_period_check: {
         income_statement:
-          incomeStatement.latest_period,
+          incomePeriod,
 
         balance_sheet:
-          balanceSheet.period,
+          balancePeriod,
 
         cash_flow:
-          cashFlow.period,
+          cashPeriod,
+
+        income_date:
+          incomeDate,
+
+        balance_date:
+          balanceDate,
+
+        cash_date:
+          cashDate,
 
         aligned:
-          parsePeriodToDate(
-            incomeStatement.latest_period
-          ) ===
-            parsePeriodToDate(
-              balanceSheet.period
-            ) &&
-          parsePeriodToDate(
-            incomeStatement.latest_period
-          ) ===
-            parsePeriodToDate(
-              cashFlow.period
-            ),
+          periodsAligned,
+      },
+
+      preservation: {
+        existing_record_found:
+          Boolean(
+            existingFundamentals
+          ),
+
+        nulls_do_not_overwrite_existing:
+          true,
       },
 
       sync: {
@@ -1104,20 +1340,21 @@ export async function GET(request) {
           completeness.completeness,
 
         available_fields:
-          completeness.available,
+          completeness.availableFields,
 
-        saved_to: "fundamentals",
+        saved_to:
+          "fundamentals",
 
         record_id:
-          savedFundamentals?.id ??
-          null,
+          saved?.id ?? null,
       },
     });
   } catch (error) {
     return Response.json(
       {
         success: false,
-        engine_version: ENGINE_VERSION,
+        engine_version:
+          ENGINE_VERSION,
         step: "unexpected",
         error:
           error?.message ||
