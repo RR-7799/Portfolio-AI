@@ -7,11 +7,9 @@ import { createClient } from "@supabase/supabase-js";
 |--------------------------------------------------------------------------
 */
 
-const UPSTOX_BASE_URL =
-  "https://api.upstox.com/v2";
+const UPSTOX_BASE_URL = "https://api.upstox.com/v2";
 
-const ENGINE_VERSION =
-  "upstox_fundamentals_v1";
+const ENGINE_VERSION = "upstox_fundamentals_v1_1";
 
 /*
 |--------------------------------------------------------------------------
@@ -19,14 +17,9 @@ const ENGINE_VERSION =
 |--------------------------------------------------------------------------
 */
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-const serviceRoleKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const analyticsToken =
-  process.env.UPSTOX_ANALYTICS_TOKEN;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const analyticsToken = process.env.UPSTOX_ANALYTICS_TOKEN;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,7 +43,7 @@ const supabase =
 
 /*
 |--------------------------------------------------------------------------
-| HELPERS
+| BASIC HELPERS
 |--------------------------------------------------------------------------
 */
 
@@ -65,24 +58,17 @@ function numberOrNull(value) {
 
   const n = Number(value);
 
-  return Number.isFinite(n)
-    ? n
-    : null;
+  return Number.isFinite(n) ? n : null;
 }
 
-function round(
-  value,
-  decimals = 2
-) {
-  const n =
-    numberOrNull(value);
+function round(value, decimals = 2) {
+  const n = numberOrNull(value);
 
   if (n === null) {
     return null;
   }
 
-  const factor =
-    10 ** decimals;
+  const factor = 10 ** decimals;
 
   return (
     Math.round(n * factor) /
@@ -90,50 +76,146 @@ function round(
   );
 }
 
-function normalizeKey(
-  value
-) {
-  return String(
-    value || ""
-  )
-    .toLowerCase()
-    .replace(
-      /[^a-z0-9]/g,
-      ""
-    );
-}
-
-/*
-|--------------------------------------------------------------------------
-| PRESERVE EXISTING GOOD DATA
-|--------------------------------------------------------------------------
-*/
-
-function preserveValue(
-  incoming,
-  existing
-) {
-  const newValue =
-    numberOrNull(incoming);
+function preserveValue(incoming, existing) {
+  const newValue = numberOrNull(incoming);
 
   if (newValue !== null) {
     return newValue;
   }
 
-  return numberOrNull(
-    existing
-  );
+  return numberOrNull(existing);
 }
 
 /*
 |--------------------------------------------------------------------------
-| API REQUEST
+| DATE HELPERS
+|--------------------------------------------------------------------------
+|
+| Upstox shareholding periods look like:
+|
+| "Jun 2026"
+| "Mar 2026"
+|
+| Supabase DATE requires:
+|
+| "2026-06-30"
+| "2026-03-31"
+|
 |--------------------------------------------------------------------------
 */
 
-async function upstoxFetch(
-  path
-) {
+function upstoxPeriodToDate(period) {
+  if (!period) {
+    return null;
+  }
+
+  const value = String(period)
+    .trim()
+    .toUpperCase();
+
+  /*
+  |--------------------------------------------------------------------------
+  | Already ISO
+  |--------------------------------------------------------------------------
+  */
+
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      value
+    )
+  ) {
+    return value;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Full month name / short month
+  |--------------------------------------------------------------------------
+  */
+
+  const match = value.match(
+    /^([A-Z]{3,9})\s+(\d{4})$/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const monthText = match[1];
+  const year = Number(match[2]);
+
+  const monthMap = {
+    JAN: 1,
+    JANUARY: 1,
+
+    FEB: 2,
+    FEBRUARY: 2,
+
+    MAR: 3,
+    MARCH: 3,
+
+    APR: 4,
+    APRIL: 4,
+
+    MAY: 5,
+
+    JUN: 6,
+    JUNE: 6,
+
+    JUL: 7,
+    JULY: 7,
+
+    AUG: 8,
+    AUGUST: 8,
+
+    SEP: 9,
+    SEPT: 9,
+    SEPTEMBER: 9,
+
+    OCT: 10,
+    OCTOBER: 10,
+
+    NOV: 11,
+    NOVEMBER: 11,
+
+    DEC: 12,
+    DECEMBER: 12,
+  };
+
+  const month =
+    monthMap[monthText];
+
+  if (!month || !year) {
+    return null;
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Quarter-end style used by Upstox shareholding data
+  |--------------------------------------------------------------------------
+  */
+
+  const lastDay =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        0
+      )
+    )
+      .toISOString()
+      .slice(0, 10);
+
+  return lastDay;
+}
+
+/*
+|--------------------------------------------------------------------------
+| UPSTOX REQUEST
+|--------------------------------------------------------------------------
+*/
+
+async function upstoxFetch(path) {
   if (!analyticsToken) {
     return {
       ok: false,
@@ -145,23 +227,22 @@ async function upstoxFetch(
   }
 
   try {
-    const response =
-      await fetch(
-        `${UPSTOX_BASE_URL}${path}`,
-        {
-          method: "GET",
+    const response = await fetch(
+      `${UPSTOX_BASE_URL}${path}`,
+      {
+        method: "GET",
 
-          headers: {
-            Accept:
-              "application/json",
+        headers: {
+          Accept:
+            "application/json",
 
-            Authorization:
-              `Bearer ${analyticsToken}`,
-          },
+          Authorization:
+            `Bearer ${analyticsToken}`,
+        },
 
-          cache: "no-store",
-        }
-      );
+        cache: "no-store",
+      }
+    );
 
     const text =
       await response.text();
@@ -169,8 +250,7 @@ async function upstoxFetch(
     let data;
 
     try {
-      data =
-        JSON.parse(text);
+      data = JSON.parse(text);
     } catch {
       data = {
         raw_text: text,
@@ -180,12 +260,10 @@ async function upstoxFetch(
     if (!response.ok) {
       return {
         ok: false,
-        status:
-          response.status,
+        status: response.status,
         error:
           `Upstox ${response.status}: ${
-            typeof data ===
-            "string"
+            typeof data === "string"
               ? data
               : JSON.stringify(data)
           }`,
@@ -195,8 +273,7 @@ async function upstoxFetch(
 
     return {
       ok: true,
-      status:
-        response.status,
+      status: response.status,
       error: null,
       data,
     };
@@ -244,7 +321,7 @@ async function getExisting(
 
 /*
 |--------------------------------------------------------------------------
-| SAVE
+| SAVE FUNDAMENTALS
 |--------------------------------------------------------------------------
 */
 
@@ -277,7 +354,7 @@ async function saveFundamentals(
 
 /*
 |--------------------------------------------------------------------------
-| EXTRACT API DATA
+| OBJECT EXTRACTION
 |--------------------------------------------------------------------------
 */
 
@@ -307,19 +384,12 @@ function getDataObject(
 function parseKeyRatios(
   response
 ) {
-  const data =
-    getDataObject(
-      response
-    );
-
   const rows =
-    Array.isArray(data)
-      ? data
-      : Array.isArray(
-          response?.data
-        )
-        ? response.data
-        : [];
+    Array.isArray(
+      response?.data
+    )
+      ? response.data
+      : [];
 
   const result = {
     pe: null,
@@ -343,27 +413,21 @@ function parseKeyRatios(
     const companyValue =
       row?.company_value;
 
-    if (
-      name === "P/E"
-    ) {
+    if (name === "P/E") {
       result.pe =
         numberOrNull(
           companyValue
         );
     }
 
-    if (
-      name === "P/B"
-    ) {
+    if (name === "P/B") {
       result.pb =
         numberOrNull(
           companyValue
         );
     }
 
-    if (
-      name === "ROE"
-    ) {
+    if (name === "ROE") {
       result.roe =
         numberOrNull(
           String(
@@ -375,9 +439,7 @@ function parseKeyRatios(
         );
     }
 
-    if (
-      name === "ROCE"
-    ) {
+    if (name === "ROCE") {
       result.roce =
         numberOrNull(
           String(
@@ -389,9 +451,7 @@ function parseKeyRatios(
         );
     }
 
-    if (
-      name === "ROA"
-    ) {
+    if (name === "ROA") {
       result.roa =
         numberOrNull(
           String(
@@ -404,8 +464,7 @@ function parseKeyRatios(
     }
 
     if (
-      name ===
-      "EV/EBITDA"
+      name === "EV/EBITDA"
     ) {
       result.ev_ebitda =
         numberOrNull(
@@ -419,72 +478,7 @@ function parseKeyRatios(
 
 /*
 |--------------------------------------------------------------------------
-| HISTORY HELPERS
-|--------------------------------------------------------------------------
-*/
-
-function getHistory(
-  data,
-  key
-) {
-  if (
-    !data ||
-    typeof data !== "object"
-  ) {
-    return [];
-  }
-
-  const value =
-    data[key];
-
-  return Array.isArray(value)
-    ? value
-    : [];
-}
-
-function latestHistoryValue(
-  data,
-  key
-) {
-  const history =
-    getHistory(
-      data,
-      key
-    );
-
-  if (!history.length) {
-    return null;
-  }
-
-  return numberOrNull(
-    history[0]?.value
-  );
-}
-
-function previousHistoryValue(
-  data,
-  key
-) {
-  const history =
-    getHistory(
-      data,
-      key
-    );
-
-  if (
-    history.length < 2
-  ) {
-    return null;
-  }
-
-  return numberOrNull(
-    history[1]?.value
-  );
-}
-
-/*
-|--------------------------------------------------------------------------
-| FINANCIAL STATEMENT PARSER
+| INCOME STATEMENT
 |--------------------------------------------------------------------------
 */
 
@@ -519,11 +513,8 @@ function parseIncomeStatement(
       previous: null,
     },
 
-    latest_period:
-      null,
-
-    previous_period:
-      null,
+    latest_period: null,
+    previous_period: null,
   };
 
   for (
@@ -602,7 +593,7 @@ function parseIncomeStatement(
 
 /*
 |--------------------------------------------------------------------------
-| CASH FLOW PARSER
+| CASH FLOW
 |--------------------------------------------------------------------------
 */
 
@@ -688,7 +679,7 @@ function parseCashFlow(
 
 /*
 |--------------------------------------------------------------------------
-| BALANCE SHEET PARSER
+| BALANCE SHEET
 |--------------------------------------------------------------------------
 */
 
@@ -711,7 +702,7 @@ function parseBalanceSheet(
     history[0] ||
     null;
 
-  const result = {
+  return {
     total_assets:
       numberOrNull(
         latest?.total_asset
@@ -730,207 +721,6 @@ function parseBalanceSheet(
       data?.full_statement ??
       null,
   };
-
-  /*
-  |--------------------------------------------------------------------------
-  | Try to extract detailed debt/equity from full statement.
-  |--------------------------------------------------------------------------
-  */
-
-  result.debt = findFinancialNumber(
-    result.full_statement,
-    [
-      "total debt",
-      "total borrowings",
-      "total borrowings",
-      "borrowings",
-      "debt",
-      "borrowings and other liabilities",
-    ]
-  );
-
-  result.equity =
-    findFinancialNumber(
-      result.full_statement,
-      [
-        "total equity",
-        "shareholders equity",
-        "shareholders equity",
-        "equity",
-      ]
-    );
-
-  return result;
-}
-
-/*
-|--------------------------------------------------------------------------
-| RECURSIVE FINANCIAL VALUE SEARCH
-|--------------------------------------------------------------------------
-|
-| Upstox exposes fs=true detailed statements.
-| The exact nested line-item shape can vary.
-|
-| We search safely for known financial labels.
-|
-*/
-
-function findFinancialNumber(
-  node,
-  targetLabels
-) {
-  if (
-    node === null ||
-    node === undefined
-  ) {
-    return null;
-  }
-
-  const normalizedTargets =
-    targetLabels.map(
-      (label) =>
-        normalizeKey(label)
-    );
-
-  if (
-    typeof node === "object"
-  ) {
-    if (
-      "name" in node &&
-      "value" in node
-    ) {
-      const normalizedName =
-        normalizeKey(
-          node.name
-        );
-
-      if (
-        normalizedTargets.includes(
-          normalizedName
-        )
-      ) {
-        const value =
-          numberOrNull(
-            node.value
-          );
-
-        if (
-          value !== null
-        ) {
-          return value;
-        }
-      }
-    }
-
-    if (
-      "label" in node &&
-      "value" in node
-    ) {
-      const normalizedLabel =
-        normalizeKey(
-          node.label
-        );
-
-      if (
-        normalizedTargets.includes(
-          normalizedLabel
-        )
-      ) {
-        const value =
-          numberOrNull(
-            node.value
-          );
-
-        if (
-          value !== null
-        ) {
-          return value;
-        }
-      }
-    }
-
-    for (
-      const key of Object.keys(
-        node
-      )
-    ) {
-      const value =
-        findFinancialNumber(
-          node[key],
-          targetLabels
-        );
-
-      if (
-        value !== null
-      ) {
-        return value;
-      }
-    }
-  }
-
-  if (
-    Array.isArray(node)
-  ) {
-    for (
-      const item of node
-    ) {
-      const value =
-        findFinancialNumber(
-          item,
-          targetLabels
-        );
-
-      if (
-        value !== null
-      ) {
-        return value;
-      }
-    }
-  }
-
-  return null;
-}
-
-/*
-|--------------------------------------------------------------------------
-| CALCULATIONS
-|--------------------------------------------------------------------------
-*/
-
-function calculateGrowth(
-  current,
-  previous
-) {
-  const currentValue =
-    numberOrNull(
-      current
-    );
-
-  const previousValue =
-    numberOrNull(
-      previous
-    );
-
-  if (
-    currentValue === null ||
-    previousValue === null ||
-    previousValue === 0
-  ) {
-    return null;
-  }
-
-  return round(
-    (
-      (
-        currentValue -
-        previousValue
-      ) /
-      Math.abs(
-        previousValue
-      )
-    ) * 100,
-    2
-  );
 }
 
 /*
@@ -942,28 +732,20 @@ function calculateGrowth(
 function parseShareholding(
   response
 ) {
-  const data =
-    getDataObject(
-      response
-    );
-
   const rows =
-    Array.isArray(data)
-      ? data
-      : Array.isArray(
-          response?.data
-        )
-        ? response.data
-        : [];
+    Array.isArray(
+      response?.data
+    )
+      ? response.data
+      : [];
 
   const result = {
     promoter: null,
     fii: null,
-    dii: null,
+    dii_other: null,
     mutual_funds: null,
     public: null,
-    as_on_date:
-      null,
+    period: null,
   };
 
   for (
@@ -988,9 +770,9 @@ function parseShareholding(
 
     if (
       latest?.period &&
-      !result.as_on_date
+      !result.period
     ) {
-      result.as_on_date =
+      result.period =
         latest.period;
     }
 
@@ -1005,10 +787,19 @@ function parseShareholding(
     }
 
     if (
-      category ===
-      "fii"
+      category === "fii"
     ) {
       result.fii =
+        numberOrNull(
+          latest?.value
+        );
+    }
+
+    if (
+      category ===
+      "other_dii"
+    ) {
+      result.dii_other =
         numberOrNull(
           latest?.value
         );
@@ -1026,30 +817,6 @@ function parseShareholding(
 
     if (
       category ===
-      "other_dii"
-    ) {
-      /*
-       * Upstox separates DII and mutual funds.
-       * We keep other_dii here and combine it with
-       * mutual funds below for the existing DII field.
-       */
-      const otherDii =
-        numberOrNull(
-          latest?.value
-        );
-
-      result.dii =
-        (
-          otherDii || 0
-        ) +
-        (
-          result.mutual_funds ||
-          0
-        );
-    }
-
-    if (
-      category ===
       "retail_and_other"
     ) {
       result.public =
@@ -1059,12 +826,37 @@ function parseShareholding(
     }
   }
 
-  return result;
+  /*
+  |--------------------------------------------------------------------------
+  | Existing DB field "dii_holding"
+  |--------------------------------------------------------------------------
+  |
+  | Combine other DII + mutual funds.
+  |
+  */
+
+  const dii =
+    (
+      result.dii_other ||
+      0
+    ) +
+    (
+      result.mutual_funds ||
+      0
+    );
+
+  return {
+    ...result,
+    dii:
+      Number.isFinite(dii)
+        ? round(dii, 2)
+        : null,
+  };
 }
 
 /*
 |--------------------------------------------------------------------------
-| SYNC SINGLE INSTRUMENT
+| SYNC ONE INSTRUMENT
 |--------------------------------------------------------------------------
 */
 
@@ -1073,8 +865,7 @@ async function syncInstrument(
 ) {
   const isin =
     String(
-      instrument.symbol ||
-        ""
+      instrument.symbol || ""
     )
       .trim()
       .toUpperCase();
@@ -1086,7 +877,7 @@ async function syncInstrument(
 
   /*
   |--------------------------------------------------------------------------
-  | CALL FUNDAMENTAL ENDPOINTS
+  | CALL ENDPOINTS
   |--------------------------------------------------------------------------
   */
 
@@ -1193,13 +984,9 @@ async function syncInstrument(
         )
       : {
           total_assets: null,
-          total_liabilities:
-            null,
+          total_liabilities: null,
           period: null,
-          debt: null,
-          equity: null,
-          full_statement:
-            null,
+          full_statement: null,
         };
 
   const ownershipData =
@@ -1210,11 +997,11 @@ async function syncInstrument(
       : {
           promoter: null,
           fii: null,
-          dii: null,
+          dii_other: null,
           mutual_funds: null,
           public: null,
-          as_on_date:
-            null,
+          dii: null,
+          period: null,
         };
 
   /*
@@ -1225,75 +1012,47 @@ async function syncInstrument(
 
   const salesGrowth =
     calculateGrowth(
-      incomeData.revenue
-        .latest,
-      incomeData.revenue
-        .previous
+      incomeData.revenue.latest,
+      incomeData.revenue.previous
     );
 
   const profitGrowth =
     calculateGrowth(
-      incomeData.net_profit
-        .latest,
-      incomeData.net_profit
-        .previous
+      incomeData.net_profit.latest,
+      incomeData.net_profit.previous
     );
 
   /*
   |--------------------------------------------------------------------------
-  | DEBT / EQUITY
+  | ROE
   |--------------------------------------------------------------------------
+  |
+  | Upstox directly gives ROE, so use that.
+  |
+  */
+
+  const roe =
+    ratioData.roe;
+
+  const roce =
+    ratioData.roce;
+
+  /*
+  |--------------------------------------------------------------------------
+  | SAVE D/E ONLY WHEN WE ACTUALLY HAVE DEBT
+  |--------------------------------------------------------------------------
+  |
+  | We do not infer debt from total liabilities.
+  |
   */
 
   let debtToEquity =
+    existing?.debt_to_equity ??
     null;
 
-  if (
-    balanceData.debt !==
-      null &&
-    balanceData.equity !==
-      null &&
-    balanceData.equity > 0
-  ) {
-    debtToEquity =
-      round(
-        balanceData.debt /
-          balanceData.equity,
-        3
-      );
-  }
-
   /*
   |--------------------------------------------------------------------------
-  | FALLBACK EQUITY CALCULATION
-  |--------------------------------------------------------------------------
-  |
-  | Assets - liabilities = equity.
-  |
-  */
-
-  if (
-    debtToEquity === null &&
-    balanceData.total_assets !==
-      null &&
-    balanceData.total_liabilities !==
-      null
-  ) {
-    const estimatedEquity =
-      balanceData.total_assets -
-      balanceData.total_liabilities;
-
-    /*
-     * We deliberately do NOT assume total liabilities = debt.
-     * Therefore we do not calculate a D/E ratio from total liabilities.
-     *
-     * We only use this value for diagnostics.
-     */
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | COMPANY PROFILE
+  | PROFILE
   |--------------------------------------------------------------------------
   */
 
@@ -1306,21 +1065,43 @@ async function syncInstrument(
 
   /*
   |--------------------------------------------------------------------------
-  | CRITICAL:
+  | MARKET CAP
   |--------------------------------------------------------------------------
   |
-  | profile.sector_market_cap_inr is SECTOR market cap.
-  | Do NOT save it as company market cap.
+  | IMPORTANT:
+  |
+  | Upstox profile's sector_market_cap_inr is the sector's
+  | market cap, NOT company's market cap.
+  |
+  | Therefore preserve existing company market cap.
   |
   */
 
-  const existingMarketCap =
+  const marketCap =
     existing?.market_cap ??
     null;
 
   /*
   |--------------------------------------------------------------------------
-  | BUILD RECORD
+  | SHAREHOLDING DATE
+  |--------------------------------------------------------------------------
+  */
+
+  const rawShareholdingPeriod =
+    ownershipData.period ??
+    existing?.shareholding_date ??
+    null;
+
+  const shareholdingDate =
+    upstoxPeriodToDate(
+      rawShareholdingPeriod
+    ) ??
+    existing?.shareholding_date ??
+    null;
+
+  /*
+  |--------------------------------------------------------------------------
+  | BUILD DB RECORD
   |--------------------------------------------------------------------------
   */
 
@@ -1330,7 +1111,7 @@ async function syncInstrument(
 
     /*
     |--------------------------------------------------------------------------
-    | Fundamental metrics
+    | Fundamentals
     |--------------------------------------------------------------------------
     */
 
@@ -1348,21 +1129,18 @@ async function syncInstrument(
 
     roe:
       preserveValue(
-        ratioData.roe,
+        roe,
         existing?.roe
       ),
 
     roce:
       preserveValue(
-        ratioData.roce,
+        roce,
         existing?.roce
       ),
 
     debt_to_equity:
-      preserveValue(
-        debtToEquity,
-        existing?.debt_to_equity
-      ),
+      debtToEquity,
 
     operating_cash_flow:
       preserveValue(
@@ -1372,7 +1150,7 @@ async function syncInstrument(
 
     /*
     |--------------------------------------------------------------------------
-    | Shareholding
+    | Ownership
     |--------------------------------------------------------------------------
     */
 
@@ -1399,13 +1177,11 @@ async function syncInstrument(
       ),
 
     shareholding_date:
-      ownershipData.as_on_date ??
-      existing?.shareholding_date ??
-      null,
+      shareholdingDate,
 
     /*
     |--------------------------------------------------------------------------
-    | Financial periods
+    | Period
     |--------------------------------------------------------------------------
     */
 
@@ -1424,13 +1200,8 @@ async function syncInstrument(
     |--------------------------------------------------------------------------
     */
 
-    /*
-     * Important:
-     * We intentionally preserve existing company market cap because
-     * Upstox profile only gives sector market capitalisation.
-     */
     market_cap:
-      existingMarketCap,
+      marketCap,
 
     pe_ratio:
       preserveValue(
@@ -1445,9 +1216,11 @@ async function syncInstrument(
       ),
 
     /*
-    * Upstox key ratios does not expose EPS/BVPS directly.
-    * Do not fabricate them.
+    |--------------------------------------------------------------------------
+    | Do not fabricate unavailable values.
+    |--------------------------------------------------------------------------
     */
+
     eps:
       existing?.eps ??
       null,
@@ -1471,6 +1244,12 @@ async function syncInstrument(
     free_cash_flow:
       existing?.free_cash_flow ??
       null,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Source
+    |--------------------------------------------------------------------------
+    */
 
     source:
       "Upstox",
@@ -1543,6 +1322,9 @@ async function syncInstrument(
   return {
     success: true,
 
+    engine_version:
+      ENGINE_VERSION,
+
     instrument: {
       id: instrument.id,
       symbol: instrument.symbol,
@@ -1553,11 +1335,8 @@ async function syncInstrument(
         null,
     },
 
-    source:
+    provider:
       "Upstox",
-
-    engine_version:
-      ENGINE_VERSION,
 
     endpoint_status: {
       profile: {
@@ -1620,9 +1399,6 @@ async function syncInstrument(
     profile: {
       sector:
         profileData.sector ??
-        null,
-      company_profile:
-        profileData.company_profile ??
         null,
     },
 
@@ -1687,48 +1463,52 @@ async function syncInstrument(
     ownership: {
       promoter:
         record.promoter_holding,
+
       fii:
         record.fii_holding,
+
       dii:
         record.dii_holding,
+
+      other_dii:
+        ownershipData.dii_other,
+
       mutual_funds:
         ownershipData.mutual_funds,
+
       public:
         ownershipData.public,
-      as_on_date:
-        record.shareholding_date,
+
+      raw_period:
+        rawShareholdingPeriod,
+
+      database_date:
+        shareholdingDate,
     },
 
     valuation: {
+      market_cap:
+        record.market_cap,
       pe:
         record.pe_ratio,
       pb:
         record.pb_ratio,
-
       eps:
         record.eps,
-
       book_value_per_share:
         record.book_value_per_share,
-
-      market_cap:
-        record.market_cap,
-
       dividend_yield:
         record.dividend_yield,
-
       week_52_high:
         record.week_52_high,
-
       week_52_low:
         record.week_52_low,
-
-      note:
-        "Upstox key-ratios currently tested for PE/PB/ROE/ROCE/ROA/EV-EBITDA. EPS/BVPS/dividend yield/52W range are preserved from existing data when available and are not fabricated.",
     },
 
     sync: {
       completeness,
+      available_fields:
+        availableFields,
       saved_to:
         "fundamentals",
       record_id:
@@ -1741,12 +1521,6 @@ async function syncInstrument(
 /*
 |--------------------------------------------------------------------------
 | GET
-|--------------------------------------------------------------------------
-|
-| Example:
-|
-| /api/sync-upstox-fundamentals?isin=INE263A01024
-|
 |--------------------------------------------------------------------------
 */
 
@@ -1766,6 +1540,8 @@ export async function GET(
           success: false,
           engine_version:
             ENGINE_VERSION,
+          step:
+            "configuration",
           error:
             "Supabase is not configured. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
         },
@@ -1781,6 +1557,8 @@ export async function GET(
           success: false,
           engine_version:
             ENGINE_VERSION,
+          step:
+            "configuration",
           error:
             "UPSTOX_ANALYTICS_TOKEN is missing.",
         },
@@ -1805,8 +1583,7 @@ export async function GET(
       (
         searchParams.get(
           "isin"
-        ) ||
-        ""
+        ) || ""
       )
         .trim()
         .toUpperCase();
@@ -1897,7 +1674,10 @@ export async function GET(
       );
 
     return NextResponse.json(
-      result
+      result,
+      {
+        status: 200,
+      }
     );
   } catch (error) {
     console.error(
