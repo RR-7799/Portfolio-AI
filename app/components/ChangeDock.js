@@ -55,7 +55,7 @@ export default function ChangeDock() {
 
   return (
     <div style={{ position: "fixed", right: 20, bottom: 112, zIndex: 49 }}>
-      <Link href="/portfolio-history" style={{ textDecoration: "none" }}>
+      <Link href="/history" style={{ textDecoration: "none" }}>
         <div className="card" style={{ padding: "12px 16px", minWidth: 230, boxShadow: "0 10px 30px rgba(0,0,0,.12)" }}>
           <div className="eyebrow">SINCE LAST SCAN</div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
@@ -63,7 +63,7 @@ export default function ChangeDock() {
             <span className={`badge ${badge}`}>{change.health.toFixed(0)} health</span>
           </div>
           <div className="muted" style={{ marginTop: 5 }}>
-            {change.scoreDelta === null ? "Score history unavailable" : `AI score ${change.scoreDelta >= 0 ? "+" : ""}${change.scoreDelta.toFixed(1)}`} 
+            {change.scoreDelta === null ? "Score history unavailable" : `AI score ${change.scoreDelta >= 0 ? "+" : ""}${change.scoreDelta.toFixed(1)}`}
             {riskUp ? ` · high-risk capital +${change.riskDelta.toFixed(1)}%` : ""}
           </div>
         </div>
