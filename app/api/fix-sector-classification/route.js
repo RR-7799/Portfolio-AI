@@ -16,13 +16,23 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 });
 
 /*
-  Sector values used by the scoring engine.
-
-  IMPORTANT:
-  These are intentionally kept aligned with the existing
-  safe_v4_1 scorer so classification changes immediately
-  improve scoring without requiring a scoring-engine rewrite.
+|--------------------------------------------------------------------------
+| ENGINE
+|--------------------------------------------------------------------------
 */
+
+const ENGINE_VERSION = "sector_fix_v1_1";
+
+/*
+|--------------------------------------------------------------------------
+| STOCK SECTORS
+|--------------------------------------------------------------------------
+|
+| These values match the sector values already used in your database
+| and the normalization logic expected by safe_v4_1.
+|
+*/
+
 const SECTORS = {
   BANK: "BANKING",
   DEFENCE: "DEFENCE & AEROSPACE",
@@ -41,45 +51,76 @@ const SECTORS = {
 };
 
 /*
-  Explicit company-level overrides.
-
-  Company overrides ALWAYS win over keyword classification.
-  This prevents common false matches such as:
-
-  HOSPITALITY -> healthcare
-  OIL in a company name -> energy
-  ENGINEER -> construction when actually industrial
+|--------------------------------------------------------------------------
+| NON-STOCK / FUND SECTORS
+|--------------------------------------------------------------------------
+|
+| These must be preserved because the scorer intentionally skips them.
+|
 */
+
+const NON_STOCK_SECTORS = [
+  "MUTUAL FUNDS & ETF",
+];
+
+/*
+|--------------------------------------------------------------------------
+| EXPLICIT COMPANY OVERRIDES
+|--------------------------------------------------------------------------
+|
+| Explicit company rules ALWAYS win over keyword rules.
+|
+| This prevents bad classifications such as:
+|
+| HOSPITALITY -> HEALTHCARE
+| ENGINEER -> CONSTRUCTION
+| AGRICULTURE -> OTHER
+| etc.
+|
+*/
+
 const COMPANY_OVERRIDES = {
-  // -------------------------
-  // TECHNOLOGY
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | TECHNOLOGY
+  |--------------------------------------------------------------------------
+  */
+
   "HFCL LIMITED": SECTORS.TECHNOLOGY,
   "FCS SOFTWARE SOL": SECTORS.TECHNOLOGY,
   "AIRAN LTD": SECTORS.TECHNOLOGY,
   "AVENUESAI LIMITED": SECTORS.TECHNOLOGY,
 
-  // -------------------------
-  // FINANCIAL
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | FINANCIAL SERVICES
+  |--------------------------------------------------------------------------
+  */
+
   "BILLIONBRAINS GARAGE VN L": SECTORS.FINANCIAL,
   "JM FINANCL": SECTORS.FINANCIAL,
   "PANAFIC INDUS": SECTORS.FINANCIAL,
   "IFCI LTD": SECTORS.FINANCIAL,
   "INDIAN RAILWAY FIN CORP L": SECTORS.FINANCIAL,
 
-  // -------------------------
-  // CHEMICALS
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | CHEMICALS
+  |--------------------------------------------------------------------------
+  */
+
   "RESONANCE SPECIALTIES LTD.": SECTORS.CHEMICALS,
   "PRAJ INDUSTRIES LTD": SECTORS.CHEMICALS,
   "IOL CHEM AND PHARMA LTD": SECTORS.CHEMICALS,
   "KREBS BIOCHEMICALS & IND": SECTORS.CHEMICALS,
   "DEEPAK FERTILIZERS & PETR": SECTORS.CHEMICALS,
 
-  // -------------------------
-  // PHARMA / HEALTHCARE
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | PHARMA / HEALTHCARE
+  |--------------------------------------------------------------------------
+  */
+
   "MAKERS LABORATORIES LTD.": SECTORS.PHARMA,
   "VEERHEALTH CARE LIMITED": SECTORS.PHARMA,
   "LOOKS HEALTH SER": SECTORS.PHARMA,
@@ -91,9 +132,12 @@ const COMPANY_OVERRIDES = {
   "NECTAR LIFESCIENCES LTD.": SECTORS.PHARMA,
   "BIOCON LIMITED.": SECTORS.PHARMA,
 
-  // -------------------------
-  // AUTOMOBILE
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | AUTOMOBILE
+  |--------------------------------------------------------------------------
+  */
+
   "CASTROL INDIA LIMITED": SECTORS.AUTOMOBILE,
   "MERCURY EV": SECTORS.AUTOMOBILE,
   "AMARA RAJA ENERGY MOB LTD": SECTORS.AUTOMOBILE,
@@ -101,14 +145,13 @@ const COMPANY_OVERRIDES = {
   "TATA MOTORS LIMITED": SECTORS.AUTOMOBILE,
   "TATA MOTORS PASS VEH LTD": SECTORS.AUTOMOBILE,
 
-  // -------------------------
-  // CONSUMER
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | CONSUMER
+  |--------------------------------------------------------------------------
+  */
 
-  // Critical correction:
-  // Hospitality must NOT become healthcare.
   "DEVYANI INTER": SECTORS.CONSUMER,
-
   "ITC LTD": SECTORS.CONSUMER,
   "ITC HOTELS LIMITED": SECTORS.CONSUMER,
   "JYOTHY LABS LIMITED": SECTORS.CONSUMER,
@@ -118,15 +161,14 @@ const COMPANY_OVERRIDES = {
   "BAJAJ HINDUSTHAN": SECTORS.CONSUMER,
   "BCL ENTERPRISE": SECTORS.CONSUMER,
   "TUNI TEXTILE MILLS LTD.": SECTORS.CONSUMER,
-
-  // Agriculture-related company.
-  // Kept in the consumer bucket rather than OTHER so the
-  // scoring system does not treat it as an unclassified company.
   "MUKTA AGRICULTURE": SECTORS.CONSUMER,
 
-  // -------------------------
-  // CONSTRUCTION / INFRA
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | CONSTRUCTION / INFRASTRUCTURE
+  |--------------------------------------------------------------------------
+  */
+
   "JK LAKSHMI CEMENT LTD": SECTORS.CONSTRUCTION,
   "G G ENGINEERING LIMITED": SECTORS.CONSTRUCTION,
   "NBCC (INDIA) LIMITED": SECTORS.CONSTRUCTION,
@@ -139,18 +181,28 @@ const COMPANY_OVERRIDES = {
   "ENVIRO INFRA ENGINEERS L": SECTORS.CONSTRUCTION,
   "GMR POW AND URBAN INFRA L": SECTORS.CONSTRUCTION,
 
-  // -------------------------
-  // METALS / MINING
-  // -------------------------
-  "LLOYDS ENTERPRISE": SECTORS.METALS,
+  /*
+  |--------------------------------------------------------------------------
+  | METALS / MINING
+  |--------------------------------------------------------------------------
+  |
+  | Lloyds Enterprise is intentionally NOT forced into metals.
+  | It is diversified and should stay OTHER.
+  |
+  */
+
+  "LLOYDS ENTERPRISE": SECTORS.OTHER,
   "VIRAM SUVARNA": SECTORS.METALS,
   "NMDC LTD.": SECTORS.METALS,
   "TATA STEEL LIMITED": SECTORS.METALS,
   "STEEL AUTHORITY OF INDIA": SECTORS.METALS,
 
-  // -------------------------
-  // ENERGY
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | ENERGY
+  |--------------------------------------------------------------------------
+  */
+
   "SUZLON ENERGY": SECTORS.ENERGY,
   "NHPC LTD": SECTORS.ENERGY,
   "NTPC LTD": SECTORS.ENERGY,
@@ -158,43 +210,74 @@ const COMPANY_OVERRIDES = {
   "JAIPRAKASH POWER": SECTORS.ENERGY,
   "GUJARAT ENERGY LIMITED": SECTORS.ENERGY,
 
-  // -------------------------
-  // OIL & GAS
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | OIL & GAS
+  |--------------------------------------------------------------------------
+  */
+
   "GAIL (INDIA) LTD": SECTORS.OIL_GAS,
 
-  // -------------------------
-  // DEFENCE
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | DEFENCE
+  |--------------------------------------------------------------------------
+  */
+
   "BHARAT ELECTRONICS LTD": SECTORS.DEFENCE,
   "GARDEN REACH SHIP&ENG LTD": SECTORS.DEFENCE,
   "AVANTEL": SECTORS.DEFENCE,
 
-  // -------------------------
-  // INDUSTRIAL
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | INDUSTRIAL
+  |--------------------------------------------------------------------------
+  */
+
   "HUHTAMAKI INDIA LIMITED": SECTORS.INDUSTRIAL,
   "INTL CONVEYORS LIMITED": SECTORS.INDUSTRIAL,
 
-  // -------------------------
-  // OTHER / DIVERSIFIED
-  // -------------------------
+  /*
+  |--------------------------------------------------------------------------
+  | OTHER / DIVERSIFIED
+  |--------------------------------------------------------------------------
+  */
 
-  // This is deliberately kept OTHER because the business
-  // spans engineering, real estate, mining and investments.
-  // We do NOT force a misleading pure sector.
   "OSWAL GREENTECH": SECTORS.OTHER,
-
   "SHREE GANESH": SECTORS.OTHER,
   "SHALIMAR PRODU": SECTORS.OTHER,
-  "KREBS BIOCHEMICALS & IND": SECTORS.CHEMICALS,
+
+  /*
+  |--------------------------------------------------------------------------
+  | MUTUAL FUNDS / ETF
+  |--------------------------------------------------------------------------
+  |
+  | These are NOT stock sectors. They must remain identifiable as funds
+  | because the portfolio scorer skips them.
+  |
+  */
+
+  "SBI FUNDS MANAGEMENT LTD": "MUTUAL FUNDS & ETF",
+  "TATAAML-TATAGOLD": "MUTUAL FUNDS & ETF",
+  "TATAAML-TATSILV": "MUTUAL FUNDS & ETF",
 };
 
 /*
-  Keyword rules are fallback rules only.
-  Explicit company overrides always take priority.
+|--------------------------------------------------------------------------
+| KEYWORD FALLBACK RULES
+|--------------------------------------------------------------------------
+|
+| These are only used when an explicit company override is unavailable.
+|
 */
+
 const KEYWORD_RULES = [
+  /*
+  |--------------------------------------------------------------------------
+  | BANK
+  |--------------------------------------------------------------------------
+  */
+
   {
     sector: SECTORS.BANK,
     keywords: [
@@ -203,6 +286,12 @@ const KEYWORD_RULES = [
     ],
   },
 
+  /*
+  |--------------------------------------------------------------------------
+  | DEFENCE
+  |--------------------------------------------------------------------------
+  */
+
   {
     sector: SECTORS.DEFENCE,
     keywords: [
@@ -210,9 +299,16 @@ const KEYWORD_RULES = [
       "DEFENSE",
       "AEROSPACE",
       "SHIPYARD",
-      "SHIP",
+      "DEFENCE SYSTEM",
+      "DEFENSE SYSTEM",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | PHARMA
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.PHARMA,
@@ -220,12 +316,20 @@ const KEYWORD_RULES = [
       "PHARMA",
       "PHARMACEUT",
       "LIFESCIENCE",
-      "BIOCON",
-      "HEALTH",
+      "LIFE SCIENCE",
+      "BIOPHARMA",
+      "HEALTHCARE",
+      "HEALTH CARE",
       "HOSPITAL",
       "HOSPITALS",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | CHEMICALS
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.CHEMICALS,
@@ -234,16 +338,25 @@ const KEYWORD_RULES = [
       "CHEM",
       "FERTILIZER",
       "FERTILISER",
-      "SPECIALT",
+      "SPECIALTY CHEMICAL",
+      "SPECIALTY",
       "BIOCHEM",
+      "BIOCHEMICAL",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | TECHNOLOGY
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.TECHNOLOGY,
     keywords: [
-      "TECH",
       "SOFTWARE",
+      "TECHNOLOGY",
+      "TECH",
       "IT ",
       "INFORMATION TECHNOLOGY",
       "DIGITAL",
@@ -252,36 +365,58 @@ const KEYWORD_RULES = [
       "OPTICAL FIBER",
       "OPTICAL FIBRE",
       "COMMUNICATION",
+      "CYBER",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | AUTOMOBILE
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.AUTOMOBILE,
     keywords: [
-      "MOTOR",
       "AUTOMOBILE",
-      "AUTO ",
+      "AUTOMOTIVE",
+      "MOTOR",
+      "MOTORCYCLE",
       "MOBILITY",
+      "AUTO ",
       "TYRE",
+      "TYRES",
+      "TIRE",
       "TIRES",
-      "CASTROL",
-      "EV ",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | CONSTRUCTION / INFRA
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.CONSTRUCTION,
     keywords: [
       "CEMENT",
       "INFRA",
+      "INFRASTRUCTURE",
       "CONSTRUCTION",
       "PROJECTS",
-      "BUILD",
-      "ENGINEERING",
       "REALTY",
-      "INFRASTRUCTURE",
+      "BUILD",
+      "BUILDERS",
+      "ENGINEERING",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | METALS / MINING
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.METALS,
@@ -295,6 +430,12 @@ const KEYWORD_RULES = [
     ],
   },
 
+  /*
+  |--------------------------------------------------------------------------
+  | ENERGY
+  |--------------------------------------------------------------------------
+  */
+
   {
     sector: SECTORS.ENERGY,
     keywords: [
@@ -305,15 +446,27 @@ const KEYWORD_RULES = [
     ],
   },
 
+  /*
+  |--------------------------------------------------------------------------
+  | OIL & GAS
+  |--------------------------------------------------------------------------
+  */
+
   {
     sector: SECTORS.OIL_GAS,
     keywords: [
+      "PETROLEUM",
       "OIL",
       "GAS",
-      "PETROLEUM",
       "NATURAL GAS",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | FINANCIAL SERVICES
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.FINANCIAL,
@@ -324,11 +477,16 @@ const KEYWORD_RULES = [
       "INVESTMENT",
       "BROKING",
       "BROKER",
-      "HOLDINGS",
       "LEASING",
       "CREDIT",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | CONSUMER
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.CONSUMER,
@@ -337,10 +495,13 @@ const KEYWORD_RULES = [
       "CONSUMER",
       "JEWELL",
       "JEWELLERY",
+      "JEWELRY",
       "TEXTILE",
+      "TEXTILES",
       "FOODS",
       "FOOD",
       "SUGAR",
+      "HOTEL",
       "HOTELS",
       "HOSPITALITY",
       "RETAIL",
@@ -348,6 +509,12 @@ const KEYWORD_RULES = [
       "TOBACCO",
     ],
   },
+
+  /*
+  |--------------------------------------------------------------------------
+  | INDUSTRIAL
+  |--------------------------------------------------------------------------
+  */
 
   {
     sector: SECTORS.INDUSTRIAL,
@@ -357,25 +524,39 @@ const KEYWORD_RULES = [
       "CONVEYOR",
       "EQUIPMENT",
       "MANUFACTURING",
+      "MACHINERY",
     ],
   },
 ];
 
 /*
-  IMPORTANT BUG FIX:
-
-  Old logic effectively treated "HOSPITALITY" as containing
-  "HOSPITAL", which incorrectly classified hospitality
-  businesses such as Devyani as healthcare.
-
-  We now check explicit overrides first and use safer matching.
+|--------------------------------------------------------------------------
+| TEXT NORMALIZATION
+|--------------------------------------------------------------------------
 */
+
 function normalizeText(value) {
   return String(value || "")
     .trim()
     .toUpperCase()
     .replace(/\s+/g, " ");
 }
+
+/*
+|--------------------------------------------------------------------------
+| SAFE KEYWORD MATCHING
+|--------------------------------------------------------------------------
+|
+| Prevents:
+|
+| HOSPITAL -> matching HOSPITALITY
+|
+| Example:
+|
+| HOSPITAL      => true
+| HOSPITALITY   => false
+|
+*/
 
 function keywordMatches(text, keyword) {
   const normalizedText = normalizeText(text);
@@ -385,47 +566,100 @@ function keywordMatches(text, keyword) {
     return false;
   }
 
-  // Exact phrase matching for longer phrases.
+  /*
+  |--------------------------------------------------------------------------
+  | Multi-word phrases
+  |--------------------------------------------------------------------------
+  */
+
   if (normalizedKeyword.includes(" ")) {
     return normalizedText.includes(normalizedKeyword);
   }
 
-  // Avoid false matches:
-  // HOSPITAL must not match HOSPITALITY.
+  /*
+  |--------------------------------------------------------------------------
+  | Single-word phrase
+  |--------------------------------------------------------------------------
+  */
+
+  const escapedKeyword = normalizedKeyword.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+
   const regex = new RegExp(
-    `(^|[^A-Z0-9])${normalizedKeyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Z0-9])`,
+    `(^|[^A-Z0-9])${escapedKeyword}($|[^A-Z0-9])`,
     "i"
   );
 
   return regex.test(normalizedText);
 }
 
+/*
+|--------------------------------------------------------------------------
+| VALID SECTOR CHECK
+|--------------------------------------------------------------------------
+*/
+
+function isValidSector(sector) {
+  const normalized = normalizeText(sector);
+
+  const stockSectorValid = Object.values(SECTORS).some(
+    (value) => normalizeText(value) === normalized
+  );
+
+  const nonStockSectorValid = NON_STOCK_SECTORS.some(
+    (value) => normalizeText(value) === normalized
+  );
+
+  return stockSectorValid || nonStockSectorValid;
+}
+
+/*
+|--------------------------------------------------------------------------
+| CLASSIFICATION
+|--------------------------------------------------------------------------
+*/
+
 function classifyCompany(companyName, currentSector) {
   const name = normalizeText(companyName);
 
-  // 1. Explicit override
-  if (COMPANY_OVERRIDES[name]) {
+  /*
+  |--------------------------------------------------------------------------
+  | 1. Explicit company override
+  |--------------------------------------------------------------------------
+  */
+
+  if (Object.prototype.hasOwnProperty.call(COMPANY_OVERRIDES, name)) {
     return {
       sector: COMPANY_OVERRIDES[name],
       method: "OVERRIDE",
     };
   }
 
-  // 2. Preserve existing valid sector when it is not OTHER
-  const existing = normalizeText(currentSector);
+  /*
+  |--------------------------------------------------------------------------
+  | 2. Preserve existing valid sector
+  |--------------------------------------------------------------------------
+  |
+  | We preserve an existing valid classification when there is no
+  | explicit override.
+  |
+  */
 
-  const validExisting = Object.values(SECTORS).some(
-    (sector) => normalizeText(sector) === existing
-  );
-
-  if (validExisting && existing !== normalizeText(SECTORS.OTHER)) {
+  if (isValidSector(currentSector)) {
     return {
       sector: currentSector,
       method: "EXISTING",
     };
   }
 
-  // 3. Keyword fallback
+  /*
+  |--------------------------------------------------------------------------
+  | 3. Keyword fallback
+  |--------------------------------------------------------------------------
+  */
+
   for (const rule of KEYWORD_RULES) {
     for (const keyword of rule.keywords) {
       if (keywordMatches(name, keyword)) {
@@ -437,268 +671,294 @@ function classifyCompany(companyName, currentSector) {
     }
   }
 
-  // 4. Keep OTHER if nothing reliable matched.
+  /*
+  |--------------------------------------------------------------------------
+  | 4. Unclassified
+  |--------------------------------------------------------------------------
+  */
+
   return {
     sector: SECTORS.OTHER,
     method: "UNCLASSIFIED",
   };
 }
 
-export async function POST(request) {
-  try {
-    const body = await request.json().catch(() => ({}));
+/*
+|--------------------------------------------------------------------------
+| PROCESS INSTRUMENTS
+|--------------------------------------------------------------------------
+*/
 
-    const onlyOther = body?.onlyOther === true;
+async function processClassification() {
+  const { data: instruments, error } = await supabase
+    .from("instruments")
+    .select("id, company_name, symbol, sector")
+    .order("company_name", { ascending: true });
 
-    const { data: instruments, error } = await supabase
-      .from("instruments")
-      .select("id, company_name, symbol, sector")
-      .order("company_name", { ascending: true });
+  if (error) {
+    throw new Error(`Instruments query failed: ${error.message}`);
+  }
 
-    if (error) {
-      throw new Error(`Instruments query failed: ${error.message}`);
-    }
+  if (!instruments || instruments.length === 0) {
+    return {
+      success: true,
+      engine_version: ENGINE_VERSION,
+      processed: 0,
+      updated: 0,
+      unchanged: 0,
+      errors: 0,
+      sector_counts: {},
+      corrections: [],
+      unclassified: [],
+    };
+  }
 
-    if (!instruments || instruments.length === 0) {
-      return NextResponse.json({
-        success: true,
-        message: "No instruments found.",
-        processed: 0,
-        updated: 0,
+  const results = [];
+
+  let updated = 0;
+  let unchanged = 0;
+  let errors = 0;
+
+  /*
+  |--------------------------------------------------------------------------
+  | Process each instrument
+  |--------------------------------------------------------------------------
+  */
+
+  for (const instrument of instruments) {
+    try {
+      const classification = classifyCompany(
+        instrument.company_name,
+        instrument.sector
+      );
+
+      const oldSector = instrument.sector;
+      const newSector = classification.sector;
+
+      const changed =
+        normalizeText(oldSector) !== normalizeText(newSector);
+
+      /*
+      |--------------------------------------------------------------------------
+      | Update only when required
+      |--------------------------------------------------------------------------
+      */
+
+      if (changed) {
+        const { error: updateError } = await supabase
+          .from("instruments")
+          .update({
+            sector: newSector,
+          })
+          .eq("id", instrument.id);
+
+        if (updateError) {
+          throw new Error(updateError.message);
+        }
+
+        updated++;
+      } else {
+        unchanged++;
+      }
+
+      results.push({
+        id: instrument.id,
+        symbol: instrument.symbol,
+        company_name: instrument.company_name,
+        old_sector: oldSector,
+        new_sector: newSector,
+        method: classification.method,
+        changed,
+      });
+    } catch (instrumentError) {
+      errors++;
+
+      results.push({
+        id: instrument.id,
+        symbol: instrument.symbol,
+        company_name: instrument.company_name,
+        old_sector: instrument.sector,
+        new_sector: null,
+        method: "ERROR",
+        changed: false,
+        error:
+          instrumentError?.message ||
+          "Unknown instrument update error",
       });
     }
+  }
 
-    const results = [];
-    let updated = 0;
-    let unchanged = 0;
-    let errors = 0;
+  /*
+  |--------------------------------------------------------------------------
+  | Sector counts
+  |--------------------------------------------------------------------------
+  */
 
-    for (const instrument of instruments) {
-      try {
-        const currentSector = normalizeText(instrument.sector);
+  const sectorCounts = {};
 
-        if (
-          onlyOther &&
-          currentSector !== normalizeText(SECTORS.OTHER)
-        ) {
-          unchanged++;
-
-          results.push({
-            id: instrument.id,
-            symbol: instrument.symbol,
-            company_name: instrument.company_name,
-            old_sector: instrument.sector,
-            new_sector: instrument.sector,
-            method: "SKIPPED_NON_OTHER",
-            changed: false,
-          });
-
-          continue;
-        }
-
-        const classification = classifyCompany(
-          instrument.company_name,
-          instrument.sector
-        );
-
-        const oldSector = instrument.sector;
-        const newSector = classification.sector;
-
-        const changed =
-          normalizeText(oldSector) !== normalizeText(newSector);
-
-        if (changed) {
-          const { error: updateError } = await supabase
-            .from("instruments")
-            .update({
-              sector: newSector,
-            })
-            .eq("id", instrument.id);
-
-          if (updateError) {
-            throw new Error(updateError.message);
-          }
-
-          updated++;
-        } else {
-          unchanged++;
-        }
-
-        results.push({
-          id: instrument.id,
-          symbol: instrument.symbol,
-          company_name: instrument.company_name,
-          old_sector: oldSector,
-          new_sector: newSector,
-          method: classification.method,
-          changed,
-        });
-      } catch (instrumentError) {
-        errors++;
-
-        results.push({
-          id: instrument.id,
-          symbol: instrument.symbol,
-          company_name: instrument.company_name,
-          old_sector: instrument.sector,
-          new_sector: null,
-          method: "ERROR",
-          changed: false,
-          error: instrumentError.message,
-        });
-      }
+  for (const item of results) {
+    if (!item.new_sector) {
+      continue;
     }
 
-    const sectorCounts = {};
+    sectorCounts[item.new_sector] =
+      (sectorCounts[item.new_sector] || 0) + 1;
+  }
 
-    for (const item of results) {
-      if (!item.new_sector) continue;
+  /*
+  |--------------------------------------------------------------------------
+  | Return detailed diagnostics
+  |--------------------------------------------------------------------------
+  */
 
-      sectorCounts[item.new_sector] =
-        (sectorCounts[item.new_sector] || 0) + 1;
-    }
+  return {
+    success: true,
+    engine_version: ENGINE_VERSION,
+    processed: instruments.length,
+    updated,
+    unchanged,
+    errors,
+    sector_counts: sectorCounts,
 
-    return NextResponse.json({
-      success: true,
-      engine_version: "sector_fix_v1",
-      processed: instruments.length,
-      updated,
-      unchanged,
-      errors,
-      sector_counts: sectorCounts,
-      corrections: results.filter((x) => x.changed),
-      unclassified: results.filter(
-        (x) =>
-          x.new_sector === SECTORS.OTHER &&
-          x.method === "UNCLASSIFIED"
-      ),
-    });
+    /*
+    |--------------------------------------------------------------------------
+    | Only actual sector changes
+    |--------------------------------------------------------------------------
+    */
+
+    corrections: results.filter(
+      (item) => item.changed === true
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Still unclassified
+    |--------------------------------------------------------------------------
+    */
+
+    unclassified: results.filter(
+      (item) =>
+        item.new_sector === SECTORS.OTHER &&
+        item.method === "UNCLASSIFIED"
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Explicit override results
+    |--------------------------------------------------------------------------
+    */
+
+    overrides_applied: results.filter(
+      (item) => item.method === "OVERRIDE"
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Keyword classifications
+    |--------------------------------------------------------------------------
+    */
+
+    keyword_classifications: results.filter(
+      (item) => item.method === "KEYWORD"
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Existing classifications preserved
+    |--------------------------------------------------------------------------
+    */
+
+    existing_preserved: results.filter(
+      (item) => item.method === "EXISTING"
+    ),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Errors
+    |--------------------------------------------------------------------------
+    */
+
+    failed_updates: results.filter(
+      (item) => item.method === "ERROR"
+    ),
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| POST
+|--------------------------------------------------------------------------
+|
+| API-friendly method.
+|
+| Can be used later by frontend/admin tools.
+|
+*/
+
+export async function POST() {
+  try {
+    const result = await processClassification();
+
+    return NextResponse.json(result);
   } catch (error) {
-    console.error("Sector classification failed:", error);
+    console.error(
+      "Sector classification POST failed:",
+      error
+    );
 
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Unknown error",
+        engine_version: ENGINE_VERSION,
+        error:
+          error?.message ||
+          "Unknown sector classification error",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
+
+/*
+|--------------------------------------------------------------------------
+| GET
+|--------------------------------------------------------------------------
+|
+| Browser-friendly method.
+|
+| This exists because you are currently deploying directly
+| through GitHub + Vercel and opening the endpoint in Chrome.
+|
+| WARNING:
+| GET performs database updates.
+| Run it once after deployment.
+|
+*/
+
 export async function GET() {
   try {
-    const { data: instruments, error } = await supabase
-      .from("instruments")
-      .select("id, company_name, symbol, sector")
-      .order("company_name", { ascending: true });
+    const result = await processClassification();
 
-    if (error) {
-      throw new Error(`Instruments query failed: ${error.message}`);
-    }
-
-    if (!instruments || instruments.length === 0) {
-      return NextResponse.json({
-        success: true,
-        engine_version: "sector_fix_v1",
-        message: "No instruments found.",
-        processed: 0,
-        updated: 0,
-        unchanged: 0,
-        errors: 0,
-      });
-    }
-
-    const results = [];
-    let updated = 0;
-    let unchanged = 0;
-    let errors = 0;
-
-    for (const instrument of instruments) {
-      try {
-        const classification = classifyCompany(
-          instrument.company_name,
-          instrument.sector
-        );
-
-        const oldSector = instrument.sector;
-        const newSector = classification.sector;
-
-        const changed =
-          normalizeText(oldSector) !== normalizeText(newSector);
-
-        if (changed) {
-          const { error: updateError } = await supabase
-            .from("instruments")
-            .update({
-              sector: newSector,
-            })
-            .eq("id", instrument.id);
-
-          if (updateError) {
-            throw new Error(updateError.message);
-          }
-
-          updated++;
-        } else {
-          unchanged++;
-        }
-
-        results.push({
-          symbol: instrument.symbol,
-          company_name: instrument.company_name,
-          old_sector: oldSector,
-          new_sector: newSector,
-          method: classification.method,
-          changed,
-        });
-      } catch (instrumentError) {
-        errors++;
-
-        results.push({
-          symbol: instrument.symbol,
-          company_name: instrument.company_name,
-          old_sector: instrument.sector,
-          new_sector: null,
-          method: "ERROR",
-          changed: false,
-          error: instrumentError.message,
-        });
-      }
-    }
-
-    const sectorCounts = {};
-
-    for (const item of results) {
-      if (!item.new_sector) continue;
-
-      sectorCounts[item.new_sector] =
-        (sectorCounts[item.new_sector] || 0) + 1;
-    }
-
-    return NextResponse.json({
-      success: true,
-      engine_version: "sector_fix_v1",
-      processed: instruments.length,
-      updated,
-      unchanged,
-      errors,
-      sector_counts: sectorCounts,
-      corrections: results.filter((x) => x.changed),
-      unclassified: results.filter(
-        (x) =>
-          x.new_sector === SECTORS.OTHER &&
-          x.method === "UNCLASSIFIED"
-      ),
-    });
+    return NextResponse.json(result);
   } catch (error) {
-    console.error("Sector classification GET failed:", error);
+    console.error(
+      "Sector classification GET failed:",
+      error
+    );
 
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Unknown error",
+        engine_version: ENGINE_VERSION,
+        error:
+          error?.message ||
+          "Unknown sector classification error",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
