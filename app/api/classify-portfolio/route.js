@@ -13,15 +13,11 @@ function getSupabase() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is missing."
-    );
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
   }
 
   if (!key) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is missing."
-    );
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   }
 
   return createClient(url, key, {
@@ -37,8 +33,7 @@ function getSupabase() {
 // CLASSIFICATION ENGINE
 // ======================================================
 
-function classifyStock(companyName, symbol) {
-
+function classifyInstrument(companyName, symbol, instrumentType) {
   const name = String(companyName || "")
     .toUpperCase()
     .trim();
@@ -47,546 +42,51 @@ function classifyStock(companyName, symbol) {
     .toUpperCase()
     .trim();
 
-
-  // ====================================================
-  // 1. EXACT PORTFOLIO OVERRIDES
-  // ====================================================
-
-  const overrides = {
-
-    // ------------------------------
-    // DEFENCE
-    // ------------------------------
-
-    "BHARAT ELECTRONICS LTD": {
-      security_type: "DEFENCE",
-      sector: "DEFENCE & AEROSPACE",
-    },
-
-    "GARDEN REACH SHIP&ENG LTD": {
-      security_type: "DEFENCE",
-      sector: "DEFENCE & AEROSPACE",
-    },
-
-
-    // ------------------------------
-    // BANKING
-    // ------------------------------
-
-    "HDFC BANK LTD": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-    "FEDERAL BANK LTD": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-    "IDBI BANK LIMITED": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-    "INDUSIND BANK LIMITED": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-    "INDIAN OVERSEAS BANK": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-    "STATE BANK OF INDIA": {
-      security_type: "BANK",
-      sector: "BANKING",
-    },
-
-
-    // ------------------------------
-    // FINANCIAL SERVICES
-    // ------------------------------
-
-    "IFCI LTD": {
-      security_type: "FINANCIAL",
-      sector: "FINANCIAL SERVICES",
-    },
-
-    "INDIAN RAILWAY FIN CORP L": {
-      security_type: "FINANCIAL",
-      sector: "FINANCIAL SERVICES",
-    },
-
-    "SBI FUNDS MANAGEMENT LTD": {
-      security_type: "FINANCIAL",
-      sector: "FINANCIAL SERVICES",
-    },
-
-    "JM FINANCL": {
-      security_type: "FINANCIAL",
-      sector: "FINANCIAL SERVICES",
-    },
-
-    "PANAFIC INDUS": {
-      security_type: "FINANCIAL",
-      sector: "FINANCIAL SERVICES",
-    },
-
-    "BILLIONBRAINS GARAGE VN L": {
-      security_type: "FINANCIAL",
-      sector: "FINTECH",
-    },
-
-
-    // ------------------------------
-    // TECHNOLOGY / IT
-    // ------------------------------
-
-    "TATA CONSULTANCY SERV LT": {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    },
-
-    "WIPRO LTD": {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    },
-
-    "FCS SOFTWARE SOL": {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    },
-
-    "AVENUESAI LIMITED": {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    },
-
-    "REDINGTON LIMITED": {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    },
-
-    "AVANTEL": {
-      security_type: "TECHNOLOGY",
-      sector: "TELECOM & TECHNOLOGY",
-    },
-
-    "HFCL LIMITED": {
-      security_type: "TECHNOLOGY",
-      sector: "TELECOM & TECHNOLOGY",
-    },
-
-    "AIRAN LTD": {
-      security_type: "TECHNOLOGY",
-      sector: "TELECOM & TECHNOLOGY",
-    },
-
-
-    // ------------------------------
-    // PHARMA / HEALTHCARE
-    // ------------------------------
-
-    "BIOCON LIMITED.": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "LAURUS LABS LIMITED": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "KOPRAN LTD": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "MAKERS LABORATORIES LTD.": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "NECTAR LIFESCIENCES LTD.": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "IOL CHEM AND PHARMA LTD": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "NARAYANA HRUDAYALAYA LTD.": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "VEERHEALTH CARE LIMITED": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "MARKSANS PHA": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "LOOKS HEALTH SER": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-    "EVEXIA LIFECARE": {
-      security_type: "PHARMA_HEALTHCARE",
-      sector: "PHARMA & HEALTHCARE",
-    },
-
-
-    // ------------------------------
-    // ENERGY / POWER
-    // ------------------------------
-
-    "AMARA RAJA ENERGY MOB LTD": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "NTPC LTD": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "NHPC LTD": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "TATA POWER CO LTD": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "SUZLON ENERGY": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "JAIPRAKASH POWER": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-    "GUJARAT ENERGY LIMITED": {
-      security_type: "ENERGY",
-      sector: "POWER & ENERGY",
-    },
-
-
-    // ------------------------------
-    // OIL & GAS
-    // ------------------------------
-
-    "GAIL (INDIA) LTD": {
-      security_type: "OIL_GAS",
-      sector: "OIL & GAS",
-    },
-
-    "CASTROL INDIA LIMITED": {
-      security_type: "OIL_GAS",
-      sector: "OIL & GAS",
-    },
-
-
-    // ------------------------------
-    // METALS / MINING
-    // ------------------------------
-
-    "TATA STEEL LIMITED": {
-      security_type: "METALS_MINING",
-      sector: "METALS & MINING",
-    },
-
-    "STEEL AUTHORITY OF INDIA": {
-      security_type: "METALS_MINING",
-      sector: "METALS & MINING",
-    },
-
-    "NMDC LTD.": {
-      security_type: "METALS_MINING",
-      sector: "METALS & MINING",
-    },
-
-    "VIRAM SUVARNA": {
-      security_type: "METALS_MINING",
-      sector: "METALS & MINING",
-    },
-
-
-    // ------------------------------
-    // INFRA / CONSTRUCTION
-    // ------------------------------
-
-    "IRB INFRA DEV LTD.": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "NBCC (INDIA) LIMITED": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "NCC LIMITED": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "JSW INFRASTRUCTURE LTD": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "PSP PROJECTS LIMITED": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "ASHOKA BUILD": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "LLOYDS ENGINEER": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "ENVIRO INFRA ENGINEERS L": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "JK LAKSHMI CEMENT LTD": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "GMR POW AND URBAN INFRA L": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-    "G G Engineering Limited": {
-      security_type: "CONSTRUCTION_INFRA",
-      sector: "CONSTRUCTION & INFRASTRUCTURE",
-    },
-
-
-    // ------------------------------
-    // AUTOMOBILE / EV
-    // ------------------------------
-
-    "TATA MOTORS LIMITED": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-    "TATA MOTORS PASS VEH LTD": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-    "MOTHERSON SUMI WRNG IND L": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-    "SAMVRDHNA MTHRSN INTL LTD": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-    "SONA BLW PRECISION FRGS L": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-    "MERCURY EV": {
-      security_type: "AUTOMOBILE",
-      sector: "AUTOMOBILE & AUTO COMPONENTS",
-    },
-
-
-    // ------------------------------
-    // CHEMICALS
-    // ------------------------------
-
-    "DEEPAK FERTILIZERS & PETR": {
-      security_type: "CHEMICALS",
-      sector: "CHEMICALS & FERTILIZERS",
-    },
-
-    "KREBS BIOCHEMICALS & IND": {
-      security_type: "CHEMICALS",
-      sector: "CHEMICALS & FERTILIZERS",
-    },
-
-    "RESONANCE SPECIALTIES LTD.": {
-      security_type: "CHEMICALS",
-      sector: "CHEMICALS & SPECIALTY MATERIALS",
-    },
-
-    "SHALIMAR PRODU": {
-      security_type: "CHEMICALS",
-      sector: "CHEMICALS & INDUSTRIALS",
-    },
-
-
-    // ------------------------------
-    // CONSUMER
-    // ------------------------------
-
-    "ITC LTD": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "ITC HOTELS LIMITED": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "KALYAN JEWELLERS IND LTD": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "TRIDENT LIMITED": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "TUNI TEXTILE MILLS LTD.": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "MISHTANN FOODS": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "DEVYANI INTER": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-    "HUHTAMAKI INDIA LIMITED": {
-      security_type: "CONSUMER",
-      sector: "CONSUMER",
-    },
-
-
-    // ------------------------------
-    // INDUSTRIAL
-    // ------------------------------
-
-    "INTL CONVEYORS LIMITED": {
-      security_type: "INDUSTRIAL",
-      sector: "INDUSTRIALS",
-    },
-
-    "PRAJ INDUSTRIES LTD": {
-      security_type: "INDUSTRIAL",
-      sector: "INDUSTRIALS",
-    },
-
-    "SHREE GANESH": {
-      security_type: "INDUSTRIAL",
-      sector: "INDUSTRIALS",
-    },
-
-    "LLOYDS ENTERPRISE": {
-      security_type: "INDUSTRIAL",
-      sector: "INDUSTRIALS",
-    },
-
-    "OSWAL GREENTECH": {
-      security_type: "INDUSTRIAL",
-      sector: "INDUSTRIALS",
-    },
-
-
-    // ------------------------------
-    // AGRICULTURE / SUGAR
-    // ------------------------------
-
-    "MUKTA AGRICULTURE": {
-      security_type: "AGRICULTURE",
-      sector: "AGRICULTURE & SUGAR",
-    },
-
-    "BAJAJ HINDUSTHAN": {
-      security_type: "AGRICULTURE",
-      sector: "AGRICULTURE & SUGAR",
-    },
-
-    "BCL ENTERPRISE": {
-      security_type: "AGRICULTURE",
-      sector: "AGRICULTURE & SUGAR",
-    },
-
-
-    // ------------------------------
-    // FUNDS / ETF
-    // ------------------------------
-
-    "TATAAML-TATAGOLD": {
-      security_type: "FUND",
-      sector: "COMMODITY ETF",
-    },
-
-    "TATAAML-TATSILV": {
-      security_type: "FUND",
-      sector: "COMMODITY ETF",
-    },
-  };
+  const type = String(instrumentType || "")
+    .toUpperCase()
+    .trim();
 
 
   // ====================================================
-  // APPLY EXACT OVERRIDE
+  // ETF / MUTUAL FUND / FUND
   // ====================================================
 
-  if (overrides[name]) {
-    return overrides[name];
-  }
-
-
-  // ====================================================
-  // FUND / ETF FALLBACK
-  // ====================================================
+  const fundWords = [
+    "ETF",
+    "MUTUAL FUND",
+    "FUND",
+    "FUND MANAGEMENT",
+    "TATAGOLD",
+    "TATSILV",
+  ];
 
   if (
-    sym.startsWith("INF") ||
-    name.includes("ETF") ||
-    name.includes("MUTUAL FUND") ||
-    name.includes("FUND")
+    type.includes("ETF") ||
+    type.includes("MF") ||
+    fundWords.some((word) =>
+      name.includes(word)
+    )
   ) {
     return {
       security_type: "FUND",
-      sector: "MUTUAL FUND / ETF",
+      sector: "MUTUAL FUNDS & ETF",
     };
   }
 
 
   // ====================================================
-  // BANK FALLBACK
+  // BANK
   // ====================================================
 
+  const bankWords = [
+    "BANK",
+    "BANKING",
+  ];
+
   if (
-    name.includes("BANK")
+    bankWords.some((word) =>
+      name.includes(word)
+    )
   ) {
     return {
       security_type: "BANK",
@@ -596,22 +96,29 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // FINANCIAL FALLBACK
+  // FINANCIAL SERVICES
   // ====================================================
 
   const financialWords = [
     "FINANC",
+    "FINANCIAL",
+    "NBFC",
+    "HOUSING FINANCE",
     "CAPITAL",
     "INVESTMENT",
-    "INSURANCE",
+    "ASSET MANAGEMENT",
+    "FUNDS MANAGEMENT",
     "BROKING",
     "BROKER",
-    "NBFC",
+    "INSURANCE",
+    "LIFE INSURANCE",
+    "MONEY",
+    "MORTGAGE",
   ];
 
   if (
-    financialWords.some(
-      (word) => name.includes(word)
+    financialWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -622,23 +129,27 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // DEFENCE FALLBACK
+  // DEFENCE / AEROSPACE
   // ====================================================
 
   const defenceWords = [
     "DEFENCE",
     "DEFENSE",
     "AEROSPACE",
+    "BHARAT ELECTRONICS",
+    "HINDUSTAN AERONAUTICS",
     "BEML",
     "MAZAGON",
-    "SHIPYARD",
+    "COCHIN SHIPYARD",
+    "GARDEN REACH",
     "BHARAT DYNAMICS",
     "MIDHANI",
+    "SOLAR INDUSTRIES",
   ];
 
   if (
-    defenceWords.some(
-      (word) => name.includes(word)
+    defenceWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -649,47 +160,27 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // TECHNOLOGY FALLBACK
-  // ====================================================
-
-  const technologyWords = [
-    "SOFTWARE",
-    "TECHNOLOG",
-    "INFOTECH",
-    "DIGITAL",
-    "COMPUTER",
-    "SYSTEMS",
-  ];
-
-  if (
-    technologyWords.some(
-      (word) => name.includes(word)
-    )
-  ) {
-    return {
-      security_type: "TECHNOLOGY",
-      sector: "IT & TECHNOLOGY",
-    };
-  }
-
-
-  // ====================================================
-  // PHARMA FALLBACK
+  // PHARMA / HEALTHCARE
   // ====================================================
 
   const pharmaWords = [
     "PHARMA",
     "PHARMACEUTICAL",
     "LIFESCIENCES",
+    "LIFE SCIENCES",
+    "BIOCON",
     "HEALTH",
     "HEALTHCARE",
     "HOSPITAL",
-    "LABORATOR",
+    "HOSPITALS",
+    "LABORATORIES",
+    "LABS",
+    "LIFESCIENCE",
   ];
 
   if (
-    pharmaWords.some(
-      (word) => name.includes(word)
+    pharmaWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -700,7 +191,34 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // ENERGY FALLBACK
+  // IT / TECHNOLOGY
+  // ====================================================
+
+  const technologyWords = [
+    "SOFTWARE",
+    "TECHNOLOG",
+    "INFOTECH",
+    "IT SERVICES",
+    "SYSTEMS",
+    "DIGITAL",
+    "COMPUTER",
+    "TECHNOLOGY",
+  ];
+
+  if (
+    technologyWords.some((word) =>
+      name.includes(word)
+    )
+  ) {
+    return {
+      security_type: "TECHNOLOGY",
+      sector: "IT & TECHNOLOGY",
+    };
+  }
+
+
+  // ====================================================
+  // POWER / ENERGY
   // ====================================================
 
   const energyWords = [
@@ -710,11 +228,13 @@ function classifyStock(companyName, symbol) {
     "ELECTRICITY",
     "SOLAR",
     "RENEWABLE",
+    "GREEN ENERGY",
+    "GREENPOWER",
   ];
 
   if (
-    energyWords.some(
-      (word) => name.includes(word)
+    energyWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -725,7 +245,7 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // OIL / GAS FALLBACK
+  // OIL / GAS
   // ====================================================
 
   const oilGasWords = [
@@ -733,11 +253,12 @@ function classifyStock(companyName, symbol) {
     "PETROLEUM",
     "OIL",
     "REFINER",
+    "REFINERY",
   ];
 
   if (
-    oilGasWords.some(
-      (word) => name.includes(word)
+    oilGasWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -748,7 +269,7 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // METALS FALLBACK
+  // METALS / MINING
   // ====================================================
 
   const metalsWords = [
@@ -764,8 +285,8 @@ function classifyStock(companyName, symbol) {
   ];
 
   if (
-    metalsWords.some(
-      (word) => name.includes(word)
+    metalsWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -776,23 +297,24 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // INFRA FALLBACK
+  // CEMENT / CONSTRUCTION / INFRA
   // ====================================================
 
-  const infraWords = [
+  const constructionWords = [
+    "CEMENT",
     "INFRA",
     "INFRASTRUCTURE",
     "CONSTRUCTION",
     "PROJECTS",
     "BUILD",
+    "BUILDERS",
     "ENGINEER",
     "ENGINEERING",
-    "CEMENT",
   ];
 
   if (
-    infraWords.some(
-      (word) => name.includes(word)
+    constructionWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -803,7 +325,7 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // AUTOMOBILE FALLBACK
+  // AUTOMOBILE / AUTO COMPONENTS
   // ====================================================
 
   const autoWords = [
@@ -811,16 +333,17 @@ function classifyStock(companyName, symbol) {
     "MOTORS",
     "AUTOMOBILE",
     "AUTOMOTIVE",
+    "AUTO",
     "MOBILITY",
     "MOTHERSON",
-    "AUTO",
     "TYRE",
     "TIRES",
+    "PRECISION",
   ];
 
   if (
-    autoWords.some(
-      (word) => name.includes(word)
+    autoWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -831,7 +354,7 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // CHEMICAL FALLBACK
+  // CHEMICALS / FERTILIZERS
   // ====================================================
 
   const chemicalWords = [
@@ -839,11 +362,12 @@ function classifyStock(companyName, symbol) {
     "FERTILIZER",
     "FERTILISER",
     "PETROCHEM",
+    "CHEMICALS",
   ];
 
   if (
-    chemicalWords.some(
-      (word) => name.includes(word)
+    chemicalWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -854,22 +378,25 @@ function classifyStock(companyName, symbol) {
 
 
   // ====================================================
-  // CONSUMER FALLBACK
+  // CONSUMER
   // ====================================================
 
   const consumerWords = [
-    "FOOD",
     "FOODS",
+    "FOOD",
     "TEXTILE",
     "RETAIL",
-    "JEWELLER",
+    "JEWELLERS",
     "JEWELLERY",
+    "HOTELS",
     "HOTEL",
+    "BEVERAGE",
+    "CONSUMER",
   ];
 
   if (
-    consumerWords.some(
-      (word) => name.includes(word)
+    consumerWords.some((word) =>
+      name.includes(word)
     )
   ) {
     return {
@@ -895,15 +422,12 @@ function classifyStock(companyName, symbol) {
 // ======================================================
 
 export async function GET() {
-
   try {
-
-    const supabase =
-      getSupabase();
+    const supabase = getSupabase();
 
 
     // ==================================================
-    // GET HOLDINGS
+    // 1. GET HOLDINGS
     // ==================================================
 
     const {
@@ -915,47 +439,44 @@ export async function GET() {
 
 
     if (holdingsError) {
-
       return NextResponse.json({
         success: false,
         step: "holdings",
-        error:
-          holdingsError.message,
+        error: holdingsError.message,
+      });
+    }
+
+
+    if (
+      !holdings ||
+      holdings.length === 0
+    ) {
+      return NextResponse.json({
+        success: false,
+        step: "holdings",
+        error: "No holdings found.",
       });
     }
 
 
     // ==================================================
-    // UNIQUE INSTRUMENT IDS
+    // 2. UNIQUE INSTRUMENT IDs
     // ==================================================
 
     const instrumentIds = [
       ...new Set(
-        (holdings || [])
+        holdings
           .map(
-            (item) =>
-              item.instrument_id
+            (holding) =>
+              holding.instrument_id
           )
           .filter(Boolean)
       ),
     ];
 
 
-    if (
-      instrumentIds.length === 0
-    ) {
-
-      return NextResponse.json({
-        success: false,
-        step: "holdings",
-        error:
-          "No instruments found in holdings.",
-      });
-    }
-
-
     // ==================================================
-    // GET INSTRUMENTS
+    // 3. GET INSTRUMENTS
     // ==================================================
 
     const {
@@ -964,7 +485,7 @@ export async function GET() {
     } = await supabase
       .from("instruments")
       .select(
-        "id, symbol, company_name, security_type, sector"
+        "id, symbol, company_name, instrument_type, sector, security_type"
       )
       .in(
         "id",
@@ -973,40 +494,58 @@ export async function GET() {
 
 
     if (instrumentsError) {
+      return NextResponse.json({
+        success: false,
+        step: "instruments",
+        error: instrumentsError.message,
+      });
+    }
 
+
+    if (
+      !instruments ||
+      instruments.length === 0
+    ) {
       return NextResponse.json({
         success: false,
         step: "instruments",
         error:
-          instrumentsError.message,
+          "No instruments found for holdings.",
       });
     }
 
 
     // ==================================================
-    // CLASSIFY
+    // 4. CLASSIFY
     // ==================================================
 
     const results = [];
     const errors = [];
-    const counts = {};
+
+    let updated = 0;
+    let unchanged = 0;
 
 
     for (
-      const instrument of
-        instruments || []
+      const instrument of instruments
     ) {
 
       try {
 
         const classification =
-          classifyStock(
+          classifyInstrument(
             instrument.company_name,
-            instrument.symbol
+            instrument.symbol,
+            instrument.instrument_type
           );
 
 
+        // ----------------------------------------------
+        // SAVE
+        // ----------------------------------------------
+
         const {
+          data: saved,
           error: saveError,
         } = await supabase
           .from("instruments")
@@ -1020,7 +559,11 @@ export async function GET() {
           .eq(
             "id",
             instrument.id
-          );
+          )
+          .select(
+            "id, symbol, company_name, instrument_type, sector, security_type"
+          )
+          .single();
 
 
         if (saveError) {
@@ -1032,6 +575,9 @@ export async function GET() {
             company_name:
               instrument.company_name,
 
+            instrument_id:
+              instrument.id,
+
             error:
               saveError.message,
           });
@@ -1040,16 +586,21 @@ export async function GET() {
         }
 
 
-        const type =
-          classification.security_type;
+        const wasChanged =
+          instrument.security_type !==
+            classification.security_type ||
+          instrument.sector !==
+            classification.sector;
 
 
-        counts[type] =
-          (counts[type] || 0) + 1;
+        if (wasChanged) {
+          updated++;
+        } else {
+          unchanged++;
+        }
 
 
         results.push({
-
           symbol:
             instrument.symbol,
 
@@ -1059,23 +610,30 @@ export async function GET() {
           instrument_id:
             instrument.id,
 
-          security_type:
-            classification.security_type,
+          previous: {
+            security_type:
+              instrument.security_type,
 
-          sector:
-            classification.sector,
+            sector:
+              instrument.sector,
+          },
+
+          classification,
+
+          saved,
         });
-
 
       } catch (error) {
 
         errors.push({
-
           symbol:
             instrument.symbol,
 
           company_name:
             instrument.company_name,
+
+          instrument_id:
+            instrument.id,
 
           error:
             error instanceof Error
@@ -1087,7 +645,27 @@ export async function GET() {
 
 
     // ==================================================
-    // FINAL RESPONSE
+    // 5. CREATE CLASSIFICATION SUMMARY
+    // ==================================================
+
+    const summary = {};
+
+
+    for (
+      const result of results
+    ) {
+
+      const type =
+        result.classification
+          .security_type;
+
+      summary[type] =
+        (summary[type] || 0) + 1;
+    }
+
+
+    // ==================================================
+    // 6. RESPONSE
     // ==================================================
 
     return NextResponse.json({
@@ -1098,18 +676,24 @@ export async function GET() {
         "Portfolio classification completed successfully.",
 
       summary: {
+        holdings:
+          holdings.length,
 
-        total_instruments:
+        unique_instruments:
           instrumentIds.length,
 
-        classified:
+        instruments_processed:
           results.length,
 
-        failed:
+        updated,
+
+        unchanged,
+
+        errors:
           errors.length,
 
-        types:
-          counts,
+        by_security_type:
+          summary,
       },
 
       results,
@@ -1124,7 +708,6 @@ export async function GET() {
       "classify-portfolio error:",
       error
     );
-
 
     return NextResponse.json(
       {
