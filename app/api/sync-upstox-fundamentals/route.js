@@ -1,1281 +1,722 @@
-import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-/*
-|--------------------------------------------------------------------------
-| CONFIG
-|--------------------------------------------------------------------------
-*/
+const ENGINE_VERSION = "upstox_fundamentals_v1_2";
 
 const UPSTOX_BASE_URL = "https://api.upstox.com/v2";
 
-const ENGINE_VERSION = "upstox_fundamentals_v1_1";
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-/*
-|--------------------------------------------------------------------------
-| ENVIRONMENT
-|--------------------------------------------------------------------------
-*/
+  if (!url || !serviceKey) {
+    throw new Error("Missing Supabase environment variables");
+  }
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const analyticsToken = process.env.UPSTOX_ANALYTICS_TOKEN;
+  return createClient(url, serviceKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
 
-/*
-|--------------------------------------------------------------------------
-| SUPABASE
-|--------------------------------------------------------------------------
-*/
+function getUpstoxHeaders() {
+  const token = process.env.UPSTOX_ANALYTICS_TOKEN;
 
-const supabase =
-  supabaseUrl && serviceRoleKey
-    ? createClient(
-        supabaseUrl,
-        serviceRoleKey,
-        {
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false,
-          },
-        }
-      )
-    : null;
+  if (!token) {
+    throw new Error("Missing UPSTOX_ANALYTICS_TOKEN");
+  }
 
-/*
-|--------------------------------------------------------------------------
-| BASIC HELPERS
-|--------------------------------------------------------------------------
-*/
+  return {
+    Accept: "application/json",
+    Authorization: `Bearer ${token}`,
+  };
+}
 
-function numberOrNull(value) {
+function toNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    const number = toNumber(value);
+
+    if (number !== null) {
+      return number;
+    }
+  }
+
+  return null;
+}
+
+function firstValue(...values) {
+  for (const value of values) {
+    if (
+      value !== null &&
+      value !== undefined &&
+      value !== ""
+    ) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function calculateGrowth(current, previous) {
+  const currentValue = toNumber(current);
+  const previousValue = toNumber(previous);
+
   if (
-    value === null ||
-    value === undefined ||
-    value === ""
+    currentValue === null ||
+    previousValue === null ||
+    previousValue === 0
   ) {
     return null;
   }
 
-  const n = Number(value);
-
-  return Number.isFinite(n) ? n : null;
-}
-
-function round(value, decimals = 2) {
-  const n = numberOrNull(value);
-
-  if (n === null) {
-    return null;
-  }
-
-  const factor = 10 ** decimals;
-
-  return (
-    Math.round(n * factor) /
-    factor
+  return Number(
+    (
+      ((currentValue - previousValue) /
+        Math.abs(previousValue)) *
+      100
+    ).toFixed(2)
   );
 }
 
-function preserveValue(incoming, existing) {
-  const newValue = numberOrNull(incoming);
-
-  if (newValue !== null) {
-    return newValue;
-  }
-
-  return numberOrNull(existing);
-}
-
-/*
-|--------------------------------------------------------------------------
-| DATE HELPERS
-|--------------------------------------------------------------------------
-|
-| Upstox shareholding periods look like:
-|
-| "Jun 2026"
-| "Mar 2026"
-|
-| Supabase DATE requires:
-|
-| "2026-06-30"
-| "2026-03-31"
-|
-|--------------------------------------------------------------------------
-*/
-
-function upstoxPeriodToDate(period) {
+function parsePeriodToDate(period) {
   if (!period) {
     return null;
   }
 
-  const value = String(period)
-    .trim()
-    .toUpperCase();
+  if (period instanceof Date) {
+    return period.toISOString().slice(0, 10);
+  }
+
+  const value = String(period).trim();
 
   /*
-  |--------------------------------------------------------------------------
-  | Already ISO
-  |--------------------------------------------------------------------------
+    Already YYYY-MM-DD
   */
-
-  if (
-    /^\d{4}-\d{2}-\d{2}$/.test(
-      value
-    )
-  ) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value;
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Full month name / short month
-  |--------------------------------------------------------------------------
+    Mar 2026
+    March 2026
   */
-
-  const match = value.match(
-    /^([A-Z]{3,9})\s+(\d{4})$/
+  const monthYear = value.match(
+    /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})$/i
   );
 
-  if (!match) {
-    return null;
-  }
+  if (monthYear) {
+    const monthMap = {
+      jan: "01",
+      feb: "02",
+      mar: "03",
+      apr: "04",
+      may: "05",
+      jun: "06",
+      jul: "07",
+      aug: "08",
+      sep: "09",
+      oct: "10",
+      nov: "11",
+      dec: "12",
+    };
 
-  const monthText = match[1];
-  const year = Number(match[2]);
+    const month = monthMap[monthYear[1].slice(0, 3).toLowerCase()];
+    const year = monthYear[2];
 
-  const monthMap = {
-    JAN: 1,
-    JANUARY: 1,
+    const lastDay = new Date(
+      Number(year),
+      Number(month),
+      0
+    ).getDate();
 
-    FEB: 2,
-    FEBRUARY: 2,
-
-    MAR: 3,
-    MARCH: 3,
-
-    APR: 4,
-    APRIL: 4,
-
-    MAY: 5,
-
-    JUN: 6,
-    JUNE: 6,
-
-    JUL: 7,
-    JULY: 7,
-
-    AUG: 8,
-    AUGUST: 8,
-
-    SEP: 9,
-    SEPT: 9,
-    SEPTEMBER: 9,
-
-    OCT: 10,
-    OCTOBER: 10,
-
-    NOV: 11,
-    NOVEMBER: 11,
-
-    DEC: 12,
-    DECEMBER: 12,
-  };
-
-  const month =
-    monthMap[monthText];
-
-  if (!month || !year) {
-    return null;
+    return `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Quarter-end style used by Upstox shareholding data
-  |--------------------------------------------------------------------------
+    FY2025-26
+    2025-26
   */
+  const financialYear = value.match(
+    /^(?:FY)?(\d{4})-(\d{2,4})$/i
+  );
 
-  const lastDay =
-    new Date(
-      Date.UTC(
-        year,
-        month,
-        0
-      )
-    )
-      .toISOString()
-      .slice(0, 10);
+  if (financialYear) {
+    const startYear = Number(financialYear[1]);
 
-  return lastDay;
+    return `${startYear + 1}-03-31`;
+  }
+
+  return null;
 }
 
-/*
-|--------------------------------------------------------------------------
-| UPSTOX REQUEST
-|--------------------------------------------------------------------------
-*/
-
-async function upstoxFetch(path) {
-  if (!analyticsToken) {
-    return {
-      ok: false,
-      status: 0,
-      error:
-        "UPSTOX_ANALYTICS_TOKEN is missing.",
-      data: null,
-    };
+function periodSortValue(period) {
+  if (!period) {
+    return 0;
   }
+
+  const parsed = parsePeriodToDate(period);
+
+  if (!parsed) {
+    return 0;
+  }
+
+  const timestamp = Date.parse(`${parsed}T00:00:00Z`);
+
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getLatestPeriodFromArray(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+
+  const candidates = items
+    .map((item) => {
+      const period = firstValue(
+        item?.period,
+        item?.date,
+        item?.financial_year,
+        item?.financialYear,
+        item?.fy,
+        item?.year,
+        item?.quarter,
+        item?.label
+      );
+
+      return {
+        item,
+        period,
+        sortValue: periodSortValue(period),
+      };
+    })
+    .filter((item) => item.period);
+
+  if (!candidates.length) {
+    return items[0];
+  }
+
+  candidates.sort(
+    (a, b) => b.sortValue - a.sortValue
+  );
+
+  return candidates[0].item;
+}
+
+function findArraysDeep(value, results = [], depth = 0) {
+  if (depth > 8 || value === null || value === undefined) {
+    return results;
+  }
+
+  if (Array.isArray(value)) {
+    results.push(value);
+
+    for (const item of value) {
+      findArraysDeep(item, results, depth + 1);
+    }
+
+    return results;
+  }
+
+  if (typeof value === "object") {
+    for (const child of Object.values(value)) {
+      findArraysDeep(child, results, depth + 1);
+    }
+  }
+
+  return results;
+}
+
+function findLatestRecordDeep(value) {
+  const arrays = findArraysDeep(value);
+
+  let best = null;
+
+  for (const array of arrays) {
+    const record = getLatestPeriodFromArray(array);
+
+    if (!record || typeof record !== "object") {
+      continue;
+    }
+
+    const period = firstValue(
+      record?.period,
+      record?.date,
+      record?.financial_year,
+      record?.financialYear,
+      record?.fy,
+      record?.year,
+      record?.quarter,
+      record?.label
+    );
+
+    const score = periodSortValue(period);
+
+    if (!best || score > best.score) {
+      best = {
+        record,
+        period,
+        score,
+      };
+    }
+  }
+
+  return best;
+}
+
+function getDataObject(responseJson) {
+  if (!responseJson) {
+    return null;
+  }
+
+  if (
+    responseJson?.data &&
+    typeof responseJson.data === "object"
+  ) {
+    return responseJson.data;
+  }
+
+  return responseJson;
+}
+
+function getDataArray(responseJson) {
+  if (!responseJson) {
+    return [];
+  }
+
+  if (Array.isArray(responseJson?.data)) {
+    return responseJson.data;
+  }
+
+  if (Array.isArray(responseJson)) {
+    return responseJson;
+  }
+
+  return [];
+}
+
+async function upstoxGet(endpoint) {
+  const startedAt = Date.now();
 
   try {
     const response = await fetch(
-      `${UPSTOX_BASE_URL}${path}`,
+      `${UPSTOX_BASE_URL}${endpoint}`,
       {
         method: "GET",
-
-        headers: {
-          Accept:
-            "application/json",
-
-          Authorization:
-            `Bearer ${analyticsToken}`,
-        },
-
+        headers: getUpstoxHeaders(),
         cache: "no-store",
       }
     );
 
-    const text =
-      await response.text();
+    const text = await response.text();
 
-    let data;
+    let json = null;
 
     try {
-      data = JSON.parse(text);
+      json = JSON.parse(text);
     } catch {
-      data = {
-        raw_text: text,
-      };
-    }
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        status: response.status,
-        error:
-          `Upstox ${response.status}: ${
-            typeof data === "string"
-              ? data
-              : JSON.stringify(data)
-          }`,
-        data,
-      };
+      json = null;
     }
 
     return {
-      ok: true,
+      ok: response.ok,
       status: response.status,
-      error: null,
-      data,
+      duration_ms: Date.now() - startedAt,
+      data: json,
+      error: response.ok
+        ? null
+        : (
+            json?.errors?.[0]?.message ||
+            json?.message ||
+            `HTTP ${response.status}`
+          ),
     };
   } catch (error) {
     return {
       ok: false,
-      status: 0,
-      error:
-        error?.message ||
-        "Unknown Upstox request error.",
+      status: null,
+      duration_ms: Date.now() - startedAt,
       data: null,
+      error: error?.message || "Upstox request failed",
     };
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| EXISTING FUNDAMENTALS
-|--------------------------------------------------------------------------
-*/
+function parseRatios(response) {
+  const data = getDataObject(response);
 
-async function getExisting(
-  instrumentId
-) {
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("fundamentals")
-    .select("*")
-    .eq(
-      "instrument_id",
-      instrumentId
-    )
-    .maybeSingle();
+  return {
+    pe: firstNumber(
+      data?.pe,
+      data?.pe_ratio,
+      data?.price_to_earnings
+    ),
 
-  if (error) {
-    throw new Error(
-      `Existing fundamentals lookup failed: ${error.message}`
-    );
-  }
+    pb: firstNumber(
+      data?.pb,
+      data?.pb_ratio,
+      data?.price_to_book
+    ),
 
-  return data || null;
+    roe: firstNumber(
+      data?.roe,
+      data?.return_on_equity
+    ),
+
+    roce: firstNumber(
+      data?.roce,
+      data?.return_on_capital_employed
+    ),
+
+    roa: firstNumber(
+      data?.roa,
+      data?.return_on_assets
+    ),
+
+    ev_ebitda: firstNumber(
+      data?.ev_ebitda,
+      data?.evToEbitda,
+      data?.enterprise_value_to_ebitda
+    ),
+  };
 }
 
-/*
-|--------------------------------------------------------------------------
-| SAVE FUNDAMENTALS
-|--------------------------------------------------------------------------
-*/
+function parseIncomeStatement(response) {
+  const data = getDataObject(response);
 
-async function saveFundamentals(
-  record
-) {
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("fundamentals")
-    .upsert(
-      record,
-      {
-        onConflict:
-          "instrument_id",
+  const latest = findLatestRecordDeep(data);
+
+  let latestRecord = latest?.record || null;
+  let latestPeriod = latest?.period || null;
+
+  /*
+    Fallback for common Upstox structure.
+  */
+  if (!latestRecord) {
+    const arrays = findArraysDeep(data);
+
+    for (const array of arrays) {
+      if (!array.length) continue;
+
+      const candidate = getLatestPeriodFromArray(array);
+
+      if (candidate && typeof candidate === "object") {
+        latestRecord = candidate;
+
+        latestPeriod = firstValue(
+          candidate?.period,
+          candidate?.date,
+          candidate?.financial_year,
+          candidate?.financialYear,
+          candidate?.fy,
+          candidate?.year,
+          candidate?.label
+        );
+
+        break;
       }
-    )
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(
-      `Fundamentals upsert failed: ${error.message}`
-    );
-  }
-
-  return data;
-}
-
-/*
-|--------------------------------------------------------------------------
-| OBJECT EXTRACTION
-|--------------------------------------------------------------------------
-*/
-
-function getDataObject(
-  response
-) {
-  if (
-    response?.data &&
-    typeof response.data ===
-      "object" &&
-    !Array.isArray(
-      response.data
-    )
-  ) {
-    return response.data;
-  }
-
-  return {};
-}
-
-/*
-|--------------------------------------------------------------------------
-| KEY RATIOS
-|--------------------------------------------------------------------------
-*/
-
-function parseKeyRatios(
-  response
-) {
-  const rows =
-    Array.isArray(
-      response?.data
-    )
-      ? response.data
-      : [];
-
-  const result = {
-    pe: null,
-    pb: null,
-    roe: null,
-    roce: null,
-    roa: null,
-    ev_ebitda: null,
-  };
-
-  for (
-    const row of rows
-  ) {
-    const name =
-      String(
-        row?.name || ""
-      )
-        .trim()
-        .toUpperCase();
-
-    const companyValue =
-      row?.company_value;
-
-    if (name === "P/E") {
-      result.pe =
-        numberOrNull(
-          companyValue
-        );
-    }
-
-    if (name === "P/B") {
-      result.pb =
-        numberOrNull(
-          companyValue
-        );
-    }
-
-    if (name === "ROE") {
-      result.roe =
-        numberOrNull(
-          String(
-            companyValue || ""
-          ).replace(
-            "%",
-            ""
-          )
-        );
-    }
-
-    if (name === "ROCE") {
-      result.roce =
-        numberOrNull(
-          String(
-            companyValue || ""
-          ).replace(
-            "%",
-            ""
-          )
-        );
-    }
-
-    if (name === "ROA") {
-      result.roa =
-        numberOrNull(
-          String(
-            companyValue || ""
-          ).replace(
-            "%",
-            ""
-          )
-        );
-    }
-
-    if (
-      name === "EV/EBITDA"
-    ) {
-      result.ev_ebitda =
-        numberOrNull(
-          companyValue
-        );
     }
   }
 
-  return result;
-}
-
-/*
-|--------------------------------------------------------------------------
-| INCOME STATEMENT
-|--------------------------------------------------------------------------
-*/
-
-function parseIncomeStatement(
-  response
-) {
-  const data =
-    getDataObject(
-      response
+  const allRecords = findArraysDeep(data)
+    .flat()
+    .filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (
+          item?.period ||
+          item?.date ||
+          item?.financial_year ||
+          item?.financialYear ||
+          item?.fy ||
+          item?.year
+        )
     );
 
-  const rows =
-    Array.isArray(
-      data?.income_statement
-    )
-      ? data.income_statement
-      : [];
+  const uniqueRecords = Array.from(
+    new Map(
+      allRecords.map((item) => [
+        JSON.stringify(item),
+        item,
+      ])
+    ).values()
+  );
 
-  const result = {
-    revenue: {
-      latest: null,
-      previous: null,
-    },
-
-    operating_profit: {
-      latest: null,
-      previous: null,
-    },
-
-    net_profit: {
-      latest: null,
-      previous: null,
-    },
-
-    latest_period: null,
-    previous_period: null,
-  };
-
-  for (
-    const row of rows
-  ) {
-    const category =
-      String(
-        row?.category || ""
+  uniqueRecords.sort(
+    (a, b) =>
+      periodSortValue(
+        firstValue(
+          b?.period,
+          b?.date,
+          b?.financial_year,
+          b?.financialYear,
+          b?.fy,
+          b?.year,
+          b?.label
+        )
+      ) -
+      periodSortValue(
+        firstValue(
+          a?.period,
+          a?.date,
+          a?.financial_year,
+          a?.financialYear,
+          a?.fy,
+          a?.year,
+          a?.label
+        )
       )
-        .trim()
-        .toLowerCase();
+  );
 
-    const history =
-      Array.isArray(
-        row?.history
-      )
-        ? row.history
-        : [];
+  const current = latestRecord;
+  const latestIndex = uniqueRecords.findIndex(
+    (item) => JSON.stringify(item) === JSON.stringify(current)
+  );
 
-    if (
-      category ===
-      "revenue"
-    ) {
-      result.revenue.latest =
-        numberOrNull(
-          history[0]?.value
-        );
+  const previous =
+    uniqueRecords.find(
+      (_, index) =>
+        index > latestIndex &&
+        JSON.stringify(_) !== JSON.stringify(current)
+    ) || uniqueRecords[1] || null;
 
-      result.revenue.previous =
-        numberOrNull(
-          history[1]?.value
-        );
+  const revenueLatest = firstNumber(
+    current?.revenue,
+    current?.revenue_from_operations,
+    current?.total_revenue,
+    current?.sales,
+    current?.net_sales
+  );
 
-      result.latest_period =
-        history[0]?.period ??
-        result.latest_period;
+  const revenuePrevious = firstNumber(
+    previous?.revenue,
+    previous?.revenue_from_operations,
+    previous?.total_revenue,
+    previous?.sales,
+    previous?.net_sales
+  );
 
-      result.previous_period =
-        history[1]?.period ??
-        result.previous_period;
-    }
+  const operatingProfitLatest = firstNumber(
+    current?.operating_profit,
+    current?.operatingProfit,
+    current?.profit_from_operations
+  );
 
-    if (
-      category ===
-      "operating_profit"
-    ) {
-      result.operating_profit.latest =
-        numberOrNull(
-          history[0]?.value
-        );
+  const netProfitLatest = firstNumber(
+    current?.net_profit,
+    current?.netProfit,
+    current?.profit_after_tax,
+    current?.profit_after_tax_pat
+  );
 
-      result.operating_profit.previous =
-        numberOrNull(
-          history[1]?.value
-        );
-    }
-
-    if (
-      category ===
-      "net_profit"
-    ) {
-      result.net_profit.latest =
-        numberOrNull(
-          history[0]?.value
-        );
-
-      result.net_profit.previous =
-        numberOrNull(
-          history[1]?.value
-        );
-    }
-  }
-
-  return result;
-}
-
-/*
-|--------------------------------------------------------------------------
-| CASH FLOW
-|--------------------------------------------------------------------------
-*/
-
-function parseCashFlow(
-  response
-) {
-  const data =
-    getDataObject(
-      response
-    );
-
-  const rows =
-    Array.isArray(
-      data?.cash_flow
-    )
-      ? data.cash_flow
-      : [];
-
-  const result = {
-    operating: null,
-    investing: null,
-    financing: null,
-    period: null,
-  };
-
-  for (
-    const row of rows
-  ) {
-    const category =
-      String(
-        row?.category || ""
-      )
-        .trim()
-        .toLowerCase();
-
-    const history =
-      Array.isArray(
-        row?.history
-      )
-        ? row.history
-        : [];
-
-    const latest =
-      history[0] || null;
-
-    if (
-      category ===
-      "operating"
-    ) {
-      result.operating =
-        numberOrNull(
-          latest?.value
-        );
-
-      result.period =
-        latest?.period ??
-        result.period;
-    }
-
-    if (
-      category ===
-      "investing"
-    ) {
-      result.investing =
-        numberOrNull(
-          latest?.value
-        );
-    }
-
-    if (
-      category ===
-      "financing"
-    ) {
-      result.financing =
-        numberOrNull(
-          latest?.value
-        );
-    }
-  }
-
-  return result;
-}
-
-/*
-|--------------------------------------------------------------------------
-| BALANCE SHEET
-|--------------------------------------------------------------------------
-*/
-
-function parseBalanceSheet(
-  response
-) {
-  const data =
-    getDataObject(
-      response
-    );
-
-  const history =
-    Array.isArray(
-      data?.history
-    )
-      ? data.history
-      : [];
-
-  const latest =
-    history[0] ||
-    null;
+  const netProfitPrevious = firstNumber(
+    previous?.net_profit,
+    previous?.netProfit,
+    previous?.profit_after_tax,
+    previous?.profit_after_tax_pat
+  );
 
   return {
-    total_assets:
-      numberOrNull(
-        latest?.total_asset
-      ),
+    latest_period: firstValue(
+      current?.period,
+      current?.date,
+      current?.financial_year,
+      current?.financialYear,
+      current?.fy,
+      current?.year,
+      current?.label,
+      latestPeriod
+    ),
 
-    total_liabilities:
-      numberOrNull(
-        latest?.total_liability
-      ),
+    previous_period: firstValue(
+      previous?.period,
+      previous?.date,
+      previous?.financial_year,
+      previous?.financialYear,
+      previous?.fy,
+      previous?.year,
+      previous?.label
+    ),
 
-    period:
-      latest?.period ??
-      null,
+    revenue_latest: revenueLatest,
+    revenue_previous: revenuePrevious,
 
-    full_statement:
-      data?.full_statement ??
-      null,
+    operating_profit_latest: operatingProfitLatest,
+
+    net_profit_latest: netProfitLatest,
+    net_profit_previous: netProfitPrevious,
+
+    sales_growth: calculateGrowth(
+      revenueLatest,
+      revenuePrevious
+    ),
+
+    profit_growth: calculateGrowth(
+      netProfitLatest,
+      netProfitPrevious
+    ),
   };
 }
 
-/*
-|--------------------------------------------------------------------------
-| SHAREHOLDING
-|--------------------------------------------------------------------------
-*/
+function parseBalanceSheet(response) {
+  const data = getDataObject(response);
 
-function parseShareholding(
-  response
-) {
-  const rows =
-    Array.isArray(
-      response?.data
-    )
-      ? response.data
-      : [];
+  const latest = findLatestRecordDeep(data);
 
-  const result = {
-    promoter: null,
-    fii: null,
-    dii_other: null,
-    mutual_funds: null,
-    public: null,
-    period: null,
-  };
+  const current = latest?.record || {};
 
-  for (
-    const row of rows
-  ) {
-    const category =
-      String(
-        row?.category || ""
-      )
-        .trim()
-        .toLowerCase();
+  const totalAssets = firstNumber(
+    current?.total_assets,
+    current?.totalAssets,
+    current?.assets
+  );
 
-    const history =
-      Array.isArray(
-        row?.history
-      )
-        ? row.history
-        : [];
+  const totalLiabilities = firstNumber(
+    current?.total_liabilities,
+    current?.totalLiabilities,
+    current?.liabilities
+  );
 
-    const latest =
-      history[0] || null;
-
-    if (
-      latest?.period &&
-      !result.period
-    ) {
-      result.period =
-        latest.period;
-    }
-
-    if (
-      category ===
-      "promoters"
-    ) {
-      result.promoter =
-        numberOrNull(
-          latest?.value
-        );
-    }
-
-    if (
-      category === "fii"
-    ) {
-      result.fii =
-        numberOrNull(
-          latest?.value
-        );
-    }
-
-    if (
-      category ===
-      "other_dii"
-    ) {
-      result.dii_other =
-        numberOrNull(
-          latest?.value
-        );
-    }
-
-    if (
-      category ===
-      "mutual_funds"
-    ) {
-      result.mutual_funds =
-        numberOrNull(
-          latest?.value
-        );
-    }
-
-    if (
-      category ===
-      "retail_and_other"
-    ) {
-      result.public =
-        numberOrNull(
-          latest?.value
-        );
-    }
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Existing DB field "dii_holding"
-  |--------------------------------------------------------------------------
-  |
-  | Combine other DII + mutual funds.
-  |
-  */
-
-  const dii =
-    (
-      result.dii_other ||
-      0
-    ) +
-    (
-      result.mutual_funds ||
-      0
-    );
+  const explicitDebtToEquity = firstNumber(
+    current?.debt_to_equity,
+    current?.debtEquity,
+    current?.debt_to_equity_ratio
+  );
 
   return {
-    ...result,
-    dii:
-      Number.isFinite(dii)
-        ? round(dii, 2)
-        : null,
+    total_assets: totalAssets,
+    total_liabilities: totalLiabilities,
+
+    /*
+      Never manufacture D/E from total liabilities.
+
+      If Upstox gives D/E directly, use it.
+      Otherwise retain null and let the DB/scorer decide.
+    */
+    debt_to_equity: explicitDebtToEquity,
+
+    period: firstValue(
+      current?.period,
+      current?.date,
+      current?.financial_year,
+      current?.financialYear,
+      current?.fy,
+      current?.year,
+      current?.label,
+      latest?.period
+    ),
   };
 }
 
-/*
-|--------------------------------------------------------------------------
-| SYNC ONE INSTRUMENT
-|--------------------------------------------------------------------------
-*/
+function parseCashFlow(response) {
+  const data = getDataObject(response);
 
-async function syncInstrument(
-  instrument
-) {
-  const isin =
-    String(
-      instrument.symbol || ""
-    )
-      .trim()
-      .toUpperCase();
+  const latest = findLatestRecordDeep(data);
 
-  const existing =
-    await getExisting(
-      instrument.id
-    );
+  const current = latest?.record || {};
 
-  /*
-  |--------------------------------------------------------------------------
-  | CALL ENDPOINTS
-  |--------------------------------------------------------------------------
-  */
+  return {
+    operating: firstNumber(
+      current?.operating_cash_flow,
+      current?.operatingCashFlow,
+      current?.cash_flow_from_operating_activities,
+      current?.operating_activities
+    ),
 
-  const profile =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/profile`
-    );
+    investing: firstNumber(
+      current?.investing_cash_flow,
+      current?.investingCashFlow,
+      current?.cash_flow_from_investing_activities,
+      current?.investing_activities
+    ),
 
-  const ratios =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/key-ratios`
-    );
+    financing: firstNumber(
+      current?.financing_cash_flow,
+      current?.financingCashFlow,
+      current?.cash_flow_from_financing_activities,
+      current?.financing_activities
+    ),
 
-  const balanceSheet =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/balance-sheet?type=consolidated&fs=true`
-    );
-
-  const cashFlow =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/cash-flow?type=consolidated&fs=true`
-    );
-
-  const incomeStatement =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/income-statement?type=consolidated&time_period=yearly&fs=true`
-    );
-
-  const shareHoldings =
-    await upstoxFetch(
-      `/fundamentals/${encodeURIComponent(
-        isin
-      )}/share-holdings`
-    );
-
-  /*
-  |--------------------------------------------------------------------------
-  | PARSE
-  |--------------------------------------------------------------------------
-  */
-
-  const ratioData =
-    ratios.ok
-      ? parseKeyRatios(
-          ratios.data
-        )
-      : {
-          pe: null,
-          pb: null,
-          roe: null,
-          roce: null,
-          roa: null,
-          ev_ebitda: null,
-        };
-
-  const incomeData =
-    incomeStatement.ok
-      ? parseIncomeStatement(
-          incomeStatement.data
-        )
-      : {
-          revenue: {
-            latest: null,
-            previous: null,
-          },
-          operating_profit: {
-            latest: null,
-            previous: null,
-          },
-          net_profit: {
-            latest: null,
-            previous: null,
-          },
-          latest_period: null,
-          previous_period: null,
-        };
-
-  const cashData =
-    cashFlow.ok
-      ? parseCashFlow(
-          cashFlow.data
-        )
-      : {
-          operating: null,
-          investing: null,
-          financing: null,
-          period: null,
-        };
-
-  const balanceData =
-    balanceSheet.ok
-      ? parseBalanceSheet(
-          balanceSheet.data
-        )
-      : {
-          total_assets: null,
-          total_liabilities: null,
-          period: null,
-          full_statement: null,
-        };
-
-  const ownershipData =
-    shareHoldings.ok
-      ? parseShareholding(
-          shareHoldings.data
-        )
-      : {
-          promoter: null,
-          fii: null,
-          dii_other: null,
-          mutual_funds: null,
-          public: null,
-          dii: null,
-          period: null,
-        };
-
-  /*
-  |--------------------------------------------------------------------------
-  | GROWTH
-  |--------------------------------------------------------------------------
-  */
-
-  const salesGrowth =
-    calculateGrowth(
-      incomeData.revenue.latest,
-      incomeData.revenue.previous
-    );
-
-  const profitGrowth =
-    calculateGrowth(
-      incomeData.net_profit.latest,
-      incomeData.net_profit.previous
-    );
-
-  /*
-  |--------------------------------------------------------------------------
-  | ROE
-  |--------------------------------------------------------------------------
-  |
-  | Upstox directly gives ROE, so use that.
-  |
-  */
-
-  const roe =
-    ratioData.roe;
-
-  const roce =
-    ratioData.roce;
-
-  /*
-  |--------------------------------------------------------------------------
-  | SAVE D/E ONLY WHEN WE ACTUALLY HAVE DEBT
-  |--------------------------------------------------------------------------
-  |
-  | We do not infer debt from total liabilities.
-  |
-  */
-
-  let debtToEquity =
-    existing?.debt_to_equity ??
-    null;
-
-  /*
-  |--------------------------------------------------------------------------
-  | PROFILE
-  |--------------------------------------------------------------------------
-  */
-
-  const profileData =
-    profile.ok
-      ? getDataObject(
-          profile.data
-        )
-      : {};
-
-  /*
-  |--------------------------------------------------------------------------
-  | MARKET CAP
-  |--------------------------------------------------------------------------
-  |
-  | IMPORTANT:
-  |
-  | Upstox profile's sector_market_cap_inr is the sector's
-  | market cap, NOT company's market cap.
-  |
-  | Therefore preserve existing company market cap.
-  |
-  */
-
-  const marketCap =
-    existing?.market_cap ??
-    null;
-
-  /*
-  |--------------------------------------------------------------------------
-  | SHAREHOLDING DATE
-  |--------------------------------------------------------------------------
-  */
-
-  const rawShareholdingPeriod =
-    ownershipData.period ??
-    existing?.shareholding_date ??
-    null;
-
-  const shareholdingDate =
-    upstoxPeriodToDate(
-      rawShareholdingPeriod
-    ) ??
-    existing?.shareholding_date ??
-    null;
-
-  /*
-  |--------------------------------------------------------------------------
-  | BUILD DB RECORD
-  |--------------------------------------------------------------------------
-  */
-
-  const record = {
-    instrument_id:
-      instrument.id,
-
-    /*
-    |--------------------------------------------------------------------------
-    | Fundamentals
-    |--------------------------------------------------------------------------
-    */
-
-    sales_growth:
-      preserveValue(
-        salesGrowth,
-        existing?.sales_growth
-      ),
-
-    profit_growth:
-      preserveValue(
-        profitGrowth,
-        existing?.profit_growth
-      ),
-
-    roe:
-      preserveValue(
-        roe,
-        existing?.roe
-      ),
-
-    roce:
-      preserveValue(
-        roce,
-        existing?.roce
-      ),
-
-    debt_to_equity:
-      debtToEquity,
-
-    operating_cash_flow:
-      preserveValue(
-        cashData.operating,
-        existing?.operating_cash_flow
-      ),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Ownership
-    |--------------------------------------------------------------------------
-    */
-
-    promoter_holding:
-      preserveValue(
-        ownershipData.promoter,
-        existing?.promoter_holding
-      ),
-
-    promoter_pledge:
-      existing?.promoter_pledge ??
-      null,
-
-    fii_holding:
-      preserveValue(
-        ownershipData.fii,
-        existing?.fii_holding
-      ),
-
-    dii_holding:
-      preserveValue(
-        ownershipData.dii,
-        existing?.dii_holding
-      ),
-
-    shareholding_date:
-      shareholdingDate,
-
-    /*
-    |--------------------------------------------------------------------------
-    | Period
-    |--------------------------------------------------------------------------
-    */
-
-    financial_year:
-      incomeData.latest_period ??
-      existing?.financial_year ??
-      null,
-
-    quarter:
-      existing?.quarter ??
-      null,
-
-    /*
-    |--------------------------------------------------------------------------
-    | Valuation
-    |--------------------------------------------------------------------------
-    */
-
-    market_cap:
-      marketCap,
-
-    pe_ratio:
-      preserveValue(
-        ratioData.pe,
-        existing?.pe_ratio
-      ),
-
-    pb_ratio:
-      preserveValue(
-        ratioData.pb,
-        existing?.pb_ratio
-      ),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Do not fabricate unavailable values.
-    |--------------------------------------------------------------------------
-    */
-
-    eps:
-      existing?.eps ??
-      null,
-
-    book_value_per_share:
-      existing?.book_value_per_share ??
-      null,
-
-    dividend_yield:
-      existing?.dividend_yield ??
-      null,
-
-    week_52_high:
-      existing?.week_52_high ??
-      null,
-
-    week_52_low:
-      existing?.week_52_low ??
-      null,
-
-    free_cash_flow:
-      existing?.free_cash_flow ??
-      null,
-
-    /*
-    |--------------------------------------------------------------------------
-    | Source
-    |--------------------------------------------------------------------------
-    */
-
-    source:
-      "Upstox",
-
-    updated_at:
-      new Date().toISOString(),
+    period: firstValue(
+      current?.period,
+      current?.date,
+      current?.financial_year,
+      current?.financialYear,
+      current?.fy,
+      current?.year,
+      current?.label,
+      latest?.period
+    ),
   };
+}
 
-  /*
-  |--------------------------------------------------------------------------
-  | SAVE
-  |--------------------------------------------------------------------------
-  */
+function parseShareholding(response) {
+  const rows = getDataArray(response);
 
-  const saved =
-    await saveFundamentals(
-      record
-    );
+  const latest = getLatestPeriodFromArray(rows);
 
-  /*
-  |--------------------------------------------------------------------------
-  | COMPLETENESS
-  |--------------------------------------------------------------------------
-  */
+  const current = latest || rows[0] || {};
 
-  const trackedFields = [
+  return {
+    promoter: firstNumber(
+      current?.promoter,
+      current?.promoter_holding,
+      current?.promoters
+    ),
+
+    fii: firstNumber(
+      current?.fii,
+      current?.fii_holding,
+      current?.foreign_institutional_investors
+    ),
+
+    dii: firstNumber(
+      current?.dii,
+      current?.dii_holding,
+      current?.domestic_institutional_investors
+    ),
+
+    other_dii: firstNumber(
+      current?.other_dii,
+      current?.otherDii
+    ),
+
+    mutual_funds: firstNumber(
+      current?.mutual_funds,
+      current?.mutualFunds
+    ),
+
+    public: firstNumber(
+      current?.public,
+      current?.public_holding,
+      current?.retail_and_other
+    ),
+
+    raw_period: firstValue(
+      current?.period,
+      current?.date,
+      current?.quarter,
+      current?.financial_year,
+      current?.financialYear,
+      current?.label
+    ),
+  };
+}
+
+function countFields(record) {
+  const fields = [
     "sales_growth",
     "profit_growth",
     "roe",
@@ -1295,426 +736,394 @@ async function syncInstrument(
     "week_52_low",
   ];
 
-  const availableFields =
-    trackedFields.filter(
-      (field) =>
-        record[field] !==
-          null &&
-        record[field] !==
-          undefined
-    );
-
-  const completeness =
-    round(
-      (
-        availableFields.length /
-        trackedFields.length
-      ) * 100,
-      1
-    );
-
-  /*
-  |--------------------------------------------------------------------------
-  | RESPONSE
-  |--------------------------------------------------------------------------
-  */
+  const available = fields.filter(
+    (field) =>
+      record?.[field] !== null &&
+      record?.[field] !== undefined
+  );
 
   return {
-    success: true,
-
-    engine_version:
-      ENGINE_VERSION,
-
-    instrument: {
-      id: instrument.id,
-      symbol: instrument.symbol,
-      company_name:
-        instrument.company_name,
-      sector:
-        instrument.sector ??
-        null,
-    },
-
-    provider:
-      "Upstox",
-
-    endpoint_status: {
-      profile: {
-        ok: profile.ok,
-        status: profile.status,
-        error:
-          profile.error ??
-          null,
-      },
-
-      key_ratios: {
-        ok: ratios.ok,
-        status: ratios.status,
-        error:
-          ratios.error ??
-          null,
-      },
-
-      balance_sheet: {
-        ok:
-          balanceSheet.ok,
-        status:
-          balanceSheet.status,
-        error:
-          balanceSheet.error ??
-          null,
-      },
-
-      cash_flow: {
-        ok:
-          cashFlow.ok,
-        status:
-          cashFlow.status,
-        error:
-          cashFlow.error ??
-          null,
-      },
-
-      income_statement: {
-        ok:
-          incomeStatement.ok,
-        status:
-          incomeStatement.status,
-        error:
-          incomeStatement.error ??
-          null,
-      },
-
-      share_holdings: {
-        ok:
-          shareHoldings.ok,
-        status:
-          shareHoldings.status,
-        error:
-          shareHoldings.error ??
-          null,
-      },
-    },
-
-    profile: {
-      sector:
-        profileData.sector ??
-        null,
-    },
-
-    ratios: {
-      pe:
-        record.pe_ratio,
-      pb:
-        record.pb_ratio,
-      roe:
-        record.roe,
-      roce:
-        record.roce,
-      roa:
-        ratioData.roa,
-      ev_ebitda:
-        ratioData.ev_ebitda,
-    },
-
-    income_statement: {
-      latest_period:
-        incomeData.latest_period,
-      previous_period:
-        incomeData.previous_period,
-      revenue_latest:
-        incomeData.revenue.latest,
-      revenue_previous:
-        incomeData.revenue.previous,
-      operating_profit_latest:
-        incomeData.operating_profit.latest,
-      net_profit_latest:
-        incomeData.net_profit.latest,
-      net_profit_previous:
-        incomeData.net_profit.previous,
-      sales_growth:
-        record.sales_growth,
-      profit_growth:
-        record.profit_growth,
-    },
-
-    balance_sheet: {
-      total_assets:
-        balanceData.total_assets,
-      total_liabilities:
-        balanceData.total_liabilities,
-      debt_to_equity:
-        record.debt_to_equity,
-      period:
-        balanceData.period,
-    },
-
-    cash_flow: {
-      operating:
-        record.operating_cash_flow,
-      investing:
-        cashData.investing,
-      financing:
-        cashData.financing,
-      period:
-        cashData.period,
-    },
-
-    ownership: {
-      promoter:
-        record.promoter_holding,
-
-      fii:
-        record.fii_holding,
-
-      dii:
-        record.dii_holding,
-
-      other_dii:
-        ownershipData.dii_other,
-
-      mutual_funds:
-        ownershipData.mutual_funds,
-
-      public:
-        ownershipData.public,
-
-      raw_period:
-        rawShareholdingPeriod,
-
-      database_date:
-        shareholdingDate,
-    },
-
-    valuation: {
-      market_cap:
-        record.market_cap,
-      pe:
-        record.pe_ratio,
-      pb:
-        record.pb_ratio,
-      eps:
-        record.eps,
-      book_value_per_share:
-        record.book_value_per_share,
-      dividend_yield:
-        record.dividend_yield,
-      week_52_high:
-        record.week_52_high,
-      week_52_low:
-        record.week_52_low,
-    },
-
-    sync: {
-      completeness,
-      available_fields:
-        availableFields,
-      saved_to:
-        "fundamentals",
-      record_id:
-        saved?.id ??
-        null,
-    },
+    available,
+    completeness: Number(
+      ((available.length / fields.length) * 100).toFixed(1)
+    ),
   };
 }
 
-/*
-|--------------------------------------------------------------------------
-| GET
-|--------------------------------------------------------------------------
-*/
-function calculateGrowth(current, previous) {
-  const currentValue = Number(current);
-  const previousValue = Number(previous);
-
-  if (
-    !Number.isFinite(currentValue) ||
-    !Number.isFinite(previousValue) ||
-    previousValue === 0
-  ) {
-    return null;
-  }
-
-  return Number(
-    (((currentValue - previousValue) / Math.abs(previousValue)) * 100).toFixed(2)
-  );
-}
-
-export async function GET(
-  request
-) {
+export async function GET(request) {
   try {
-    /*
-    |--------------------------------------------------------------------------
-    | CONFIG
-    |--------------------------------------------------------------------------
-    */
+    const supabase = getSupabase();
 
-    if (!supabase) {
-      return NextResponse.json(
-        {
-          success: false,
-          engine_version:
-            ENGINE_VERSION,
-          step:
-            "configuration",
-          error:
-            "Supabase is not configured. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    if (!analyticsToken) {
-      return NextResponse.json(
-        {
-          success: false,
-          engine_version:
-            ENGINE_VERSION,
-          step:
-            "configuration",
-          error:
-            "UPSTOX_ANALYTICS_TOKEN is missing.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | ISIN
-    |--------------------------------------------------------------------------
-    */
-
-    const { searchParams } =
-      new URL(
-        request.url
-      );
+    const { searchParams } = new URL(request.url);
 
     const requestedIsin =
-      (
-        searchParams.get(
-          "isin"
-        ) || ""
-      )
-        .trim()
-        .toUpperCase();
+      searchParams.get("isin")?.trim().toUpperCase();
 
     if (!requestedIsin) {
-      return NextResponse.json(
+      return Response.json(
         {
           success: false,
-          engine_version:
-            ENGINE_VERSION,
-          error:
-            "Missing ?isin= parameter.",
-          example:
-            "/api/sync-upstox-fundamentals?isin=INE263A01024",
+          engine_version: ENGINE_VERSION,
+          error: "Missing isin parameter",
         },
-        {
-          status: 400,
-        }
+        { status: 400 }
       );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | FIND INSTRUMENT
-    |--------------------------------------------------------------------------
-    */
+    const isIsin =
+      /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(requestedIsin);
 
-    const {
-      data: instruments,
-      error,
-    } = await supabase
-      .from("instruments")
-      .select(
-        "id, symbol, company_name, sector"
-      )
-      .eq(
-        "symbol",
-        requestedIsin
-      )
-      .limit(1);
-
-    if (error) {
-      return NextResponse.json(
+    if (!isIsin) {
+      return Response.json(
         {
           success: false,
-          engine_version:
-            ENGINE_VERSION,
-          step:
-            "find_instrument",
-          error:
-            error.message,
+          engine_version: ENGINE_VERSION,
+          error: "Invalid ISIN",
         },
-        {
-          status: 500,
-        }
+        { status: 400 }
       );
     }
 
-    if (
-      !instruments ||
-      instruments.length === 0
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          engine_version:
-            ENGINE_VERSION,
-          step:
-            "find_instrument",
-          error:
-            `No instrument found for ISIN ${requestedIsin}.`,
-        },
-        {
-          status: 404,
-        }
+    const { data: instrument, error: instrumentError } =
+      await supabase
+        .from("instruments")
+        .select(
+          "id,symbol,company_name,sector"
+        )
+        .eq("symbol", requestedIsin)
+        .maybeSingle();
+
+    if (instrumentError) {
+      throw new Error(
+        `Failed to load instrument: ${instrumentError.message}`
       );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | SYNC
-    |--------------------------------------------------------------------------
-    */
-
-    const result =
-      await syncInstrument(
-        instruments[0]
+    if (!instrument) {
+      return Response.json(
+        {
+          success: false,
+          engine_version: ENGINE_VERSION,
+          error: `Instrument not found for ISIN ${requestedIsin}`,
+        },
+        { status: 404 }
       );
+    }
 
-    return NextResponse.json(
-      result,
-      {
-        status: 200,
-      }
+    const endpoints = {};
+
+    endpoints.profile = await upstoxGet(
+      `/fundamentals/${requestedIsin}/profile`
     );
+
+    endpoints.key_ratios = await upstoxGet(
+      `/fundamentals/${requestedIsin}/key-ratios`
+    );
+
+    endpoints.balance_sheet = await upstoxGet(
+      `/fundamentals/${requestedIsin}/balance-sheet?type=consolidated&fs=true`
+    );
+
+    endpoints.cash_flow = await upstoxGet(
+      `/fundamentals/${requestedIsin}/cash-flow?type=consolidated&fs=true`
+    );
+
+    endpoints.income_statement = await upstoxGet(
+      `/fundamentals/${requestedIsin}/income-statement?type=consolidated&time_period=yearly&fs=true`
+    );
+
+    endpoints.share_holdings = await upstoxGet(
+      `/fundamentals/${requestedIsin}/share-holdings`
+    );
+
+    const endpointStatus = {};
+
+    for (const [name, endpoint] of Object.entries(
+      endpoints
+    )) {
+      endpointStatus[name] = {
+        ok: endpoint.ok,
+        status: endpoint.status,
+        error: endpoint.error,
+      };
+    }
+
+    const ratios = parseRatios(
+      endpoints.key_ratios.data
+    );
+
+    const incomeStatement = parseIncomeStatement(
+      endpoints.income_statement.data
+    );
+
+    const balanceSheet = parseBalanceSheet(
+      endpoints.balance_sheet.data
+    );
+
+    const cashFlow = parseCashFlow(
+      endpoints.cash_flow.data
+    );
+
+    const ownership = parseShareholding(
+      endpoints.share_holdings.data
+    );
+
+    /*
+      Preserve the company's existing market cap and
+      other good fields in Supabase when Upstox does not
+      provide them on the fundamentals response.
+
+      This prevents a successful sync from degrading an
+      already populated record.
+    */
+    const { data: existingFundamentals } =
+      await supabase
+        .from("fundamentals")
+        .select("*")
+        .eq("instrument_id", instrument.id)
+        .maybeSingle();
+
+    const profileData =
+      getDataObject(endpoints.profile.data);
+
+    const existing = existingFundamentals || {};
+
+    const merged = {
+      instrument_id: instrument.id,
+
+      sales_growth:
+        incomeStatement.sales_growth ??
+        existing.sales_growth ??
+        null,
+
+      profit_growth:
+        incomeStatement.profit_growth ??
+        existing.profit_growth ??
+        null,
+
+      roe:
+        ratios.roe ??
+        existing.roe ??
+        null,
+
+      roce:
+        ratios.roce ??
+        existing.roce ??
+        null,
+
+      debt_to_equity:
+        balanceSheet.debt_to_equity ??
+        existing.debt_to_equity ??
+        null,
+
+      operating_cash_flow:
+        cashFlow.operating ??
+        existing.operating_cash_flow ??
+        null,
+
+      promoter_holding:
+        ownership.promoter ??
+        existing.promoter_holding ??
+        null,
+
+      fii_holding:
+        ownership.fii ??
+        existing.fii_holding ??
+        null,
+
+      /*
+        Compatibility mapping used by our existing scorer.
+      */
+      dii_holding:
+        ownership.dii !== null &&
+        ownership.dii !== undefined
+          ? ownership.dii
+          : existing.dii_holding ?? null,
+
+      market_cap:
+        existing.market_cap ??
+        null,
+
+      pe_ratio:
+        ratios.pe ??
+        existing.pe_ratio ??
+        null,
+
+      pb_ratio:
+        ratios.pb ??
+        existing.pb_ratio ??
+        null,
+
+      book_value_per_share:
+        existing.book_value_per_share ??
+        null,
+
+      eps:
+        existing.eps ??
+        null,
+
+      dividend_yield:
+        existing.dividend_yield ??
+        null,
+
+      week_52_high:
+        existing.week_52_high ??
+        null,
+
+      week_52_low:
+        existing.week_52_low ??
+        null,
+
+      financial_year:
+        incomeStatement.latest_period ??
+        existing.financial_year ??
+        null,
+
+      shareholding_date:
+        parsePeriodToDate(
+          ownership.raw_period
+        ) ??
+        existing.shareholding_date ??
+        null,
+
+      updated_at: new Date().toISOString(),
+    };
+
+    const completeness = countFields(merged);
+
+    const { data: savedFundamentals, error: saveError } =
+      await supabase
+        .from("fundamentals")
+        .upsert(
+          merged,
+          {
+            onConflict: "instrument_id",
+          }
+        )
+        .select()
+        .single();
+
+    if (saveError) {
+      throw new Error(
+        `Failed to save fundamentals: ${saveError.message}`
+      );
+    }
+
+    return Response.json({
+      success: true,
+      engine_version: ENGINE_VERSION,
+
+      instrument: {
+        id: instrument.id,
+        symbol: instrument.symbol,
+        company_name: instrument.company_name,
+        sector: instrument.sector,
+      },
+
+      provider: "Upstox",
+
+      endpoint_status: endpointStatus,
+
+      profile: {
+        sector:
+          profileData?.sector ??
+          null,
+      },
+
+      ratios: {
+        pe: ratios.pe,
+        pb: ratios.pb,
+        roe: ratios.roe,
+        roce: ratios.roce,
+        roa: ratios.roa,
+        ev_ebitda: ratios.ev_ebitda,
+      },
+
+      income_statement: incomeStatement,
+
+      balance_sheet: balanceSheet,
+
+      cash_flow: cashFlow,
+
+      ownership: {
+        promoter: ownership.promoter,
+        fii: ownership.fii,
+        dii: ownership.dii,
+        other_dii: ownership.other_dii,
+        mutual_funds: ownership.mutual_funds,
+        public: ownership.public,
+        raw_period: ownership.raw_period,
+        database_date:
+          parsePeriodToDate(
+            ownership.raw_period
+          ),
+      },
+
+      valuation: {
+        market_cap: merged.market_cap,
+        pe: merged.pe_ratio,
+        pb: merged.pb_ratio,
+        eps: merged.eps,
+        book_value_per_share:
+          merged.book_value_per_share,
+        dividend_yield:
+          merged.dividend_yield,
+        week_52_high:
+          merged.week_52_high,
+        week_52_low:
+          merged.week_52_low,
+      },
+
+      financial_period_check: {
+        income_statement:
+          incomeStatement.latest_period,
+
+        balance_sheet:
+          balanceSheet.period,
+
+        cash_flow:
+          cashFlow.period,
+
+        aligned:
+          parsePeriodToDate(
+            incomeStatement.latest_period
+          ) ===
+            parsePeriodToDate(
+              balanceSheet.period
+            ) &&
+          parsePeriodToDate(
+            incomeStatement.latest_period
+          ) ===
+            parsePeriodToDate(
+              cashFlow.period
+            ),
+      },
+
+      sync: {
+        completeness:
+          completeness.completeness,
+
+        available_fields:
+          completeness.available,
+
+        saved_to: "fundamentals",
+
+        record_id:
+          savedFundamentals?.id ??
+          null,
+      },
+    });
   } catch (error) {
-    console.error(
-      "Upstox fundamentals sync failed:",
-      error
-    );
-
-    return NextResponse.json(
+    return Response.json(
       {
         success: false,
-        engine_version:
-          ENGINE_VERSION,
-        step:
-          "unexpected",
+        engine_version: ENGINE_VERSION,
+        step: "unexpected",
         error:
           error?.message ||
-          "Unknown Upstox fundamentals sync error.",
+          "Unknown error",
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     );
   }
 }
