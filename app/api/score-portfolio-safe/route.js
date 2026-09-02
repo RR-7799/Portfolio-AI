@@ -1,137 +1,200 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* =========================================================
-   BASIC HELPERS
-========================================================= */
+// ============================================================
+// PORTFOLIO AI — SAFE V4
+//
+// Major changes from V3:
+//
+// 1. Missing metrics NEVER receive a perfect score.
+// 2. Missing valuation is treated as N/A, not ignored silently.
+// 3. Negative PE is NOT considered cheap.
+// 4. Partial data receives an explicit penalty.
+// 5. BUY requires sufficient confidence.
+// 6. High-risk stocks are prevented from receiving extreme scores.
+// 7. Sector-specific normalization retained.
+// 8. Existing DB schema retained.
+// 9. Mutual funds skipped.
+// 10. No BharatStock API calls.
+// ============================================================
+
+const ENGINE_VERSION = "safe_v4";
+
+// ============================================================
+// HELPERS
+// ============================================================
 
 function num(value) {
-  if (value === null || value === undefined || value === "") {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return null;
   }
 
   const n = Number(value);
+
   return Number.isFinite(n) ? n : null;
 }
 
 function clamp(value, min = 0, max = 100) {
-  return Math.max(min, Math.min(max, value));
+  return Math.max(
+    min,
+    Math.min(max, value)
+  );
 }
 
 function average(values) {
   const valid = values.filter(
-    (v) => v !== null && v !== undefined && Number.isFinite(v)
+    (v) =>
+      v !== null &&
+      v !== undefined &&
+      Number.isFinite(v)
   );
 
-  if (!valid.length) return null;
+  if (!valid.length) {
+    return null;
+  }
 
-  return valid.reduce((a, b) => a + b, 0) / valid.length;
+  return (
+    valid.reduce(
+      (a, b) => a + b,
+      0
+    ) / valid.length
+  );
 }
 
-/* =========================================================
-   SECTOR NORMALIZATION
-========================================================= */
-
-function normalizeSector(rawSector = "") {
-  const sector = String(rawSector).toUpperCase().trim();
-
+function round(value, decimals = 1) {
   if (
-    sector.includes("BANK") ||
-    sector === "BANKING"
+    value === null ||
+    value === undefined ||
+    !Number.isFinite(value)
   ) {
+    return null;
+  }
+
+  const factor =
+    10 ** decimals;
+
+  return (
+    Math.round(
+      value * factor
+    ) / factor
+  );
+}
+
+// ============================================================
+// SECTOR NORMALIZATION
+// ============================================================
+
+function normalizeSector(rawSector) {
+  const s =
+    String(
+      rawSector || ""
+    ).toUpperCase();
+
+  if (s.includes("BANK")) {
     return "BANK";
   }
 
   if (
-    sector.includes("DEFENCE") ||
-    sector.includes("DEFENSE") ||
-    sector.includes("AEROSPACE")
+    s.includes("DEFENCE") ||
+    s.includes("DEFENSE") ||
+    s.includes("AEROSPACE")
   ) {
     return "DEFENCE";
   }
 
   if (
-    sector.includes("TECHNOLOGY") ||
-    sector.includes("IT &") ||
-    sector === "IT"
+    s.includes("TECH") ||
+    s.includes("SOFTWARE") ||
+    s.includes("IT ")
   ) {
     return "TECHNOLOGY";
   }
 
   if (
-    sector.includes("PHARMA") ||
-    sector.includes("HEALTHCARE") ||
-    sector.includes("LIFE SCIENCE")
+    s.includes("PHARMA") ||
+    s.includes("HEALTH") ||
+    s.includes("HOSPITAL")
   ) {
     return "PHARMA_HEALTHCARE";
   }
 
   if (
-    sector.includes("CONSTRUCTION") ||
-    sector.includes("INFRA")
+    s.includes("CONSTRUCTION") ||
+    s.includes("INFRA")
   ) {
     return "CONSTRUCTION_INFRA";
   }
 
   if (
-    sector.includes("AUTOMOBILE") ||
-    sector.includes("AUTO COMPONENT")
+    s.includes("AUTO") ||
+    s.includes("AUTOMOBILE")
   ) {
     return "AUTOMOBILE";
   }
 
   if (
-    sector.includes("CONSUMER") ||
-    sector.includes("FMCG") ||
-    sector.includes("JEWELL")
+    s.includes("CONSUMER") ||
+    s.includes("FMCG") ||
+    s.includes("RETAIL") ||
+    s.includes("JEWELL")
   ) {
     return "CONSUMER";
   }
 
   if (
-    sector.includes("CHEMICAL") ||
-    sector.includes("FERTILIZER")
+    s.includes("CHEMICAL") ||
+    s.includes("FERTILIZER")
   ) {
     return "CHEMICALS";
   }
 
   if (
-    sector.includes("POWER") ||
-    sector.includes("ENERGY")
+    s.includes("POWER") ||
+    s.includes("ENERGY") ||
+    s.includes("RENEWABLE")
   ) {
     return "ENERGY";
   }
 
   if (
-    sector.includes("OIL") ||
-    sector.includes("GAS")
+    s.includes("OIL") ||
+    s.includes("GAS")
   ) {
     return "OIL_GAS";
   }
 
   if (
-    sector.includes("METAL") ||
-    sector.includes("MINING")
+    s.includes("METAL") ||
+    s.includes("MINING") ||
+    s.includes("STEEL")
   ) {
     return "METALS_MINING";
   }
 
   if (
-    sector.includes("FINANCIAL") ||
-    sector.includes("NBFC") ||
-    sector.includes("INSURANCE")
+    s.includes("FINANCIAL") ||
+    s.includes("FINANCE") ||
+    s.includes("NBFC") ||
+    s.includes("INSURANCE")
   ) {
     return "FINANCIAL";
   }
 
   if (
-    sector.includes("INDUSTRIAL") ||
-    sector.includes("PACKAGING")
+    s.includes("INDUSTRIAL") ||
+    s.includes("ENGINEERING") ||
+    s.includes("MANUFACTUR")
   ) {
     return "INDUSTRIAL";
   }
@@ -139,719 +202,1127 @@ function normalizeSector(rawSector = "") {
   return "OTHER";
 }
 
-/* =========================================================
-   DATA HEALTH
-========================================================= */
+// ============================================================
+// FIELD ACCESS
+// ============================================================
 
-function calculateCompleteness(f, sector) {
-  let fields;
+function getField(
+  fundamentals,
+  names
+) {
+  for (
+    const name of names
+  ) {
+    const value =
+      fundamentals?.[name];
 
-  /*
-    Banks need a different data-health model.
-  */
+    if (
+      value !== null &&
+      value !== undefined &&
+      value !== ""
+    ) {
+      return num(value);
+    }
+  }
 
-  if (sector === "BANK") {
-    const capital =
-      f.capital_adequacy_ratio ??
-      f.capital_adequacy ??
-      f.car;
+  return null;
+}
 
+// ============================================================
+// GROWTH SCORE
+// ============================================================
+
+function growthScore(
+  salesGrowth,
+  profitGrowth
+) {
+  const scores = [];
+
+  if (
+    salesGrowth !== null
+  ) {
+    if (salesGrowth >= 25)
+      scores.push(100);
+    else if (salesGrowth >= 15)
+      scores.push(90);
+    else if (salesGrowth >= 10)
+      scores.push(80);
+    else if (salesGrowth >= 5)
+      scores.push(65);
+    else if (salesGrowth >= 0)
+      scores.push(50);
+    else if (salesGrowth >= -10)
+      scores.push(30);
+    else
+      scores.push(10);
+  }
+
+  if (
+    profitGrowth !== null
+  ) {
+    if (profitGrowth >= 30)
+      scores.push(100);
+    else if (profitGrowth >= 20)
+      scores.push(95);
+    else if (profitGrowth >= 10)
+      scores.push(85);
+    else if (profitGrowth >= 5)
+      scores.push(70);
+    else if (profitGrowth >= 0)
+      scores.push(55);
+    else if (profitGrowth >= -10)
+      scores.push(35);
+    else
+      scores.push(10);
+  }
+
+  return average(scores);
+}
+
+// ============================================================
+// PROFITABILITY SCORE
+// ============================================================
+
+function profitabilityScore(
+  roe,
+  roce
+) {
+  const scores = [];
+
+  if (roe !== null) {
+    if (roe >= 25)
+      scores.push(100);
+    else if (roe >= 20)
+      scores.push(90);
+    else if (roe >= 15)
+      scores.push(80);
+    else if (roe >= 10)
+      scores.push(65);
+    else if (roe >= 5)
+      scores.push(45);
+    else
+      scores.push(20);
+  }
+
+  if (roce !== null) {
+    if (roce >= 25)
+      scores.push(100);
+    else if (roce >= 20)
+      scores.push(90);
+    else if (roce >= 15)
+      scores.push(80);
+    else if (roce >= 10)
+      scores.push(65);
+    else if (roce >= 5)
+      scores.push(45);
+    else
+      scores.push(20);
+  }
+
+  return average(scores);
+}
+
+// ============================================================
+// BALANCE SHEET SCORE
+// ============================================================
+
+function balanceScore(
+  debtEquity
+) {
+  if (
+    debtEquity === null
+  ) {
+    return null;
+  }
+
+  if (debtEquity <= 0.1)
+    return 100;
+
+  if (debtEquity <= 0.25)
+    return 90;
+
+  if (debtEquity <= 0.5)
+    return 80;
+
+  if (debtEquity <= 0.75)
+    return 70;
+
+  if (debtEquity <= 1)
+    return 55;
+
+  if (debtEquity <= 1.5)
+    return 40;
+
+  if (debtEquity <= 2)
+    return 25;
+
+  return 10;
+}
+
+// ============================================================
+// CASH FLOW SCORE
+// ============================================================
+
+function cashFlowScore(
+  operatingCashFlow,
+  marketCap
+) {
+  if (
+    operatingCashFlow === null
+  ) {
+    return null;
+  }
+
+  // If market cap unavailable, evaluate direction only.
+  if (
+    marketCap === null ||
+    marketCap <= 0
+  ) {
+    return (
+      operatingCashFlow > 0
+        ? 70
+        : 25
+    );
+  }
+
+  const cashToMarketCap =
+    operatingCashFlow /
+    marketCap;
+
+  if (cashToMarketCap >= 0.12)
+    return 100;
+
+  if (cashToMarketCap >= 0.08)
+    return 90;
+
+  if (cashToMarketCap >= 0.05)
+    return 80;
+
+  if (cashToMarketCap >= 0.03)
+    return 70;
+
+  if (cashToMarketCap > 0)
+    return 55;
+
+  return 20;
+}
+
+// ============================================================
+// OWNERSHIP SCORE
+// ============================================================
+
+function ownershipScore(
+  promoter,
+  fii,
+  dii
+) {
+  const scores = [];
+
+  if (
+    promoter !== null
+  ) {
+    if (promoter >= 60)
+      scores.push(100);
+    else if (promoter >= 50)
+      scores.push(90);
+    else if (promoter >= 40)
+      scores.push(80);
+    else if (promoter >= 30)
+      scores.push(65);
+    else if (promoter >= 20)
+      scores.push(50);
+    else
+      scores.push(35);
+  }
+
+  if (
+    fii !== null
+  ) {
+    if (fii >= 20)
+      scores.push(100);
+    else if (fii >= 15)
+      scores.push(90);
+    else if (fii >= 10)
+      scores.push(80);
+    else if (fii >= 5)
+      scores.push(65);
+    else
+      scores.push(50);
+  }
+
+  if (
+    dii !== null
+  ) {
+    if (dii >= 20)
+      scores.push(100);
+    else if (dii >= 15)
+      scores.push(90);
+    else if (dii >= 10)
+      scores.push(80);
+    else if (dii >= 5)
+      scores.push(65);
+    else
+      scores.push(50);
+  }
+
+  return average(scores);
+}
+
+// ============================================================
+// VALUATION SCORE
+//
+// IMPORTANT:
+// Negative PE is NOT cheap.
+// Missing PE/PB = N/A.
+// ============================================================
+
+function valuationScore(
+  pe,
+  pb
+) {
+  const scores = [];
+
+  // PE
+  if (
+    pe !== null &&
+    pe > 0
+  ) {
+    if (pe <= 10)
+      scores.push(100);
+    else if (pe <= 15)
+      scores.push(90);
+    else if (pe <= 20)
+      scores.push(80);
+    else if (pe <= 25)
+      scores.push(70);
+    else if (pe <= 35)
+      scores.push(55);
+    else if (pe <= 50)
+      scores.push(40);
+    else if (pe <= 75)
+      scores.push(25);
+    else
+      scores.push(10);
+  }
+
+  // PB
+  if (
+    pb !== null &&
+    pb > 0
+  ) {
+    if (pb <= 1.5)
+      scores.push(100);
+    else if (pb <= 2.5)
+      scores.push(90);
+    else if (pb <= 4)
+      scores.push(80);
+    else if (pb <= 6)
+      scores.push(65);
+    else if (pb <= 10)
+      scores.push(45);
+    else if (pb <= 15)
+      scores.push(30);
+    else
+      scores.push(15);
+  }
+
+  return average(scores);
+}
+
+// ============================================================
+// RISK SCORE
+//
+// Higher = safer.
+// ============================================================
+
+function riskScore({
+  debtEquity,
+  profitGrowth,
+  roe,
+  pe,
+  valuation,
+  sector,
+}) {
+  const scores = [];
+
+  // Debt
+  if (
+    debtEquity !== null
+  ) {
+    if (debtEquity <= 0.25)
+      scores.push(95);
+    else if (debtEquity <= 0.5)
+      scores.push(85);
+    else if (debtEquity <= 1)
+      scores.push(70);
+    else if (debtEquity <= 1.5)
+      scores.push(50);
+    else
+      scores.push(25);
+  }
+
+  // Profit deterioration
+  if (
+    profitGrowth !== null
+  ) {
+    if (profitGrowth >= 10)
+      scores.push(90);
+    else if (profitGrowth >= 0)
+      scores.push(75);
+    else if (profitGrowth >= -10)
+      scores.push(50);
+    else if (profitGrowth >= -25)
+      scores.push(30);
+    else
+      scores.push(15);
+  }
+
+  // ROE
+  if (
+    roe !== null
+  ) {
+    if (roe >= 20)
+      scores.push(90);
+    else if (roe >= 15)
+      scores.push(80);
+    else if (roe >= 10)
+      scores.push(65);
+    else if (roe >= 5)
+      scores.push(45);
+    else
+      scores.push(25);
+  }
+
+  // Valuation risk
+  if (
+    pe !== null
+  ) {
+    if (pe <= 20 && pe > 0)
+      scores.push(90);
+    else if (pe <= 35 && pe > 0)
+      scores.push(70);
+    else if (pe <= 50 && pe > 0)
+      scores.push(50);
+    else if (pe > 50)
+      scores.push(25);
+    else
+      scores.push(30);
+  }
+
+  // Sector risk
+  if (
+    sector === "BANK" ||
+    sector === "FINANCIAL"
+  ) {
+    // Financial companies receive a modest risk haircut
+    // until sector-specific metrics are available.
+    scores.push(65);
+  }
+
+  if (
+    sector === "OTHER"
+  ) {
+    scores.push(55);
+  }
+
+  const result =
+    average(scores);
+
+  return result;
+}
+
+// ============================================================
+// COMPLETENESS
+// ============================================================
+
+function calculateCompleteness({
+  sector,
+  salesGrowth,
+  profitGrowth,
+  roe,
+  roce,
+  debtEquity,
+  operatingCashFlow,
+  promoter,
+  fii,
+  dii,
+  pe,
+  pb,
+}) {
+  let fields = [];
+
+  if (
+    sector === "BANK"
+  ) {
     fields = [
-      f.sales_growth,
-      f.profit_growth,
-      f.roe,
-      f.roa,
-      f.gross_npa,
-      f.net_npa,
-      capital,
-      f.pe_ratio,
-      f.pb_ratio,
-      f.promoter_holding,
+      salesGrowth,
+      profitGrowth,
+      roe,
+      debtEquity,
+      promoter,
+      fii,
+      dii,
+      pe,
+      pb,
     ];
   } else {
     fields = [
-      f.sales_growth,
-      f.profit_growth,
-      f.roe,
-      f.roce,
-      f.debt_to_equity,
-      f.operating_cash_flow,
-      f.promoter_holding,
-      f.market_cap,
-      f.pe_ratio,
-      f.pb_ratio,
+      salesGrowth,
+      profitGrowth,
+      roe,
+      roce,
+      debtEquity,
+      operatingCashFlow,
+      promoter,
+      fii,
+      dii,
+      pe,
+      pb,
     ];
   }
 
-  const available = fields.filter(
-    (v) => v !== null && v !== undefined
-  ).length;
+  const available =
+    fields.filter(
+      (value) =>
+        value !== null
+    ).length;
 
-  return Math.round(
-    (available / fields.length) * 100
+  return round(
+    (
+      available /
+      fields.length
+    ) * 100
   );
 }
 
-/* =========================================================
-   GROWTH
-========================================================= */
-
-function growthScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 25) return 100;
-  if (value >= 20) return 92;
-  if (value >= 15) return 84;
-  if (value >= 10) return 76;
-  if (value >= 5) return 64;
-  if (value >= 0) return 50;
-
-  if (value >= -10) return 35;
-
-  return 20;
-}
-
-/* =========================================================
-   PROFITABILITY
-========================================================= */
-
-function roeScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 25) return 100;
-  if (value >= 20) return 92;
-  if (value >= 15) return 84;
-  if (value >= 10) return 72;
-  if (value >= 5) return 55;
-  if (value >= 0) return 35;
-
-  return 20;
-}
-
-function roceScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 30) return 100;
-  if (value >= 25) return 92;
-  if (value >= 18) return 84;
-  if (value >= 12) return 72;
-  if (value >= 7) return 55;
-  if (value >= 0) return 35;
-
-  return 20;
-}
-
-/* =========================================================
-   BALANCE SHEET
-========================================================= */
-
-function debtScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value <= 0.2) return 100;
-  if (value <= 0.5) return 90;
-  if (value <= 0.75) return 80;
-  if (value <= 1.25) return 65;
-  if (value <= 2) return 45;
-  if (value <= 3) return 30;
-
-  return 15;
-}
-
-/* =========================================================
-   CASH FLOW
-========================================================= */
-
-function cashFlowScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value > 0) return 85;
-
-  return 20;
-}
-
-/* =========================================================
-   OWNERSHIP
-========================================================= */
-
-function promoterScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 60) return 100;
-  if (value >= 50) return 92;
-  if (value >= 40) return 82;
-  if (value >= 30) return 72;
-  if (value >= 20) return 60;
-  if (value >= 10) return 48;
-
-  return 35;
-}
-
-/* =========================================================
-   VALUATION
-========================================================= */
-
-function peScore(value) {
-  value = num(value);
-
-  if (value === null || value <= 0) return null;
-
-  if (value <= 12) return 100;
-  if (value <= 18) return 90;
-  if (value <= 25) return 80;
-  if (value <= 35) return 68;
-  if (value <= 50) return 52;
-  if (value <= 70) return 35;
-
-  return 20;
-}
-
-function pbScore(value) {
-  value = num(value);
-
-  if (value === null || value <= 0) return null;
-
-  if (value <= 1.5) return 100;
-  if (value <= 2.5) return 90;
-  if (value <= 4) return 80;
-  if (value <= 6) return 65;
-  if (value <= 10) return 45;
-  if (value <= 15) return 30;
-
-  return 20;
-}
-
-function valuationScore(pe, pb) {
-  return average([
-    peScore(pe),
-    pbScore(pb),
-  ]);
-}
-
-/* =========================================================
-   BANK METRICS
-========================================================= */
-
-function npaScore(value, type) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (type === "gross") {
-    if (value <= 1) return 100;
-    if (value <= 2) return 90;
-    if (value <= 3) return 80;
-    if (value <= 5) return 65;
-    if (value <= 8) return 45;
-
-    return 20;
-  }
-
-  if (value <= 0.5) return 100;
-  if (value <= 1) return 90;
-  if (value <= 2) return 80;
-  if (value <= 3) return 65;
-  if (value <= 5) return 45;
-
-  return 20;
-}
-
-function capitalScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 18) return 100;
-  if (value >= 16) return 95;
-  if (value >= 14) return 85;
-  if (value >= 12) return 72;
-  if (value >= 10) return 55;
-
-  return 30;
-}
-
-function roaScore(value) {
-  value = num(value);
-
-  if (value === null) return null;
-
-  if (value >= 2) return 100;
-  if (value >= 1.5) return 92;
-  if (value >= 1) return 82;
-  if (value >= 0.75) return 70;
-  if (value >= 0.5) return 55;
-  if (value >= 0) return 35;
-
-  return 20;
-}
-
-/* =========================================================
-   SECTOR WEIGHTS
-========================================================= */
-
-const SECTOR_WEIGHTS = {
-  TECHNOLOGY: {
-    growth: 25,
-    profitability: 30,
-    balance: 15,
-    cash: 15,
-    valuation: 10,
-    ownership: 5,
-  },
-
-  PHARMA_HEALTHCARE: {
-    growth: 25,
-    profitability: 30,
-    balance: 15,
-    cash: 15,
-    valuation: 10,
-    ownership: 5,
-  },
-
-  DEFENCE: {
-    growth: 25,
-    profitability: 25,
-    balance: 15,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  CONSTRUCTION_INFRA: {
-    growth: 25,
-    profitability: 20,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  AUTOMOBILE: {
-    growth: 25,
-    profitability: 25,
-    balance: 15,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  CONSUMER: {
-    growth: 25,
-    profitability: 30,
-    balance: 10,
-    cash: 15,
-    valuation: 15,
-    ownership: 5,
-  },
-
-  CHEMICALS: {
-    growth: 25,
-    profitability: 25,
-    balance: 15,
-    cash: 15,
-    valuation: 15,
-    ownership: 5,
-  },
-
-  ENERGY: {
-    growth: 20,
-    profitability: 25,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  OIL_GAS: {
-    growth: 20,
-    profitability: 25,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  METALS_MINING: {
-    growth: 20,
-    profitability: 25,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  FINANCIAL: {
-    growth: 25,
-    profitability: 30,
-    balance: 15,
-    cash: 10,
-    valuation: 10,
-    ownership: 10,
-  },
-
-  INDUSTRIAL: {
-    growth: 25,
-    profitability: 25,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 5,
-  },
-
-  OTHER: {
-    growth: 25,
-    profitability: 25,
-    balance: 20,
-    cash: 15,
-    valuation: 10,
-    ownership: 5,
-  },
-};
-
-/* =========================================================
-   GENERIC SCORE
-========================================================= */
-
-function calculateGenericScore(f, sector) {
-  const weights =
-    SECTOR_WEIGHTS[sector] ||
-    SECTOR_WEIGHTS.OTHER;
-
-  const components = {
-    growth: average([
-      growthScore(f.sales_growth),
-      growthScore(f.profit_growth),
-    ]),
-
-    profitability: average([
-      roeScore(f.roe),
-      roceScore(f.roce),
-    ]),
-
-    balance: debtScore(
-      f.debt_to_equity
-    ),
-
-    cash: cashFlowScore(
-      f.operating_cash_flow
-    ),
-
-    valuation: valuationScore(
-      f.pe_ratio,
-      f.pb_ratio
-    ),
-
-    ownership: promoterScore(
-      f.promoter_holding
-    ),
-  };
-
-  let weightedTotal = 0;
-  let availableWeight = 0;
-
-  for (const [key, weight] of Object.entries(weights)) {
-    const component = components[key];
-
-    if (component !== null) {
-      weightedTotal +=
-        component * weight;
-
-      availableWeight += weight;
-    }
-  }
-
-  if (!availableWeight) {
-    return {
-      score: null,
-      confidence: 0,
-      components,
-    };
-  }
-
-  return {
-    score: Math.round(
-      clamp(
-        weightedTotal /
-          availableWeight
-      )
-    ),
-
-    confidence: Math.round(
-      availableWeight
-    ),
-
-    components,
-  };
-}
-
-/* =========================================================
-   BANK SCORE
-========================================================= */
-
-function calculateBankScore(f) {
-  const capital =
-    f.capital_adequacy_ratio ??
-    f.capital_adequacy ??
-    f.car;
-
-  const components = {
-    growth: average([
-      growthScore(f.sales_growth),
-      growthScore(f.profit_growth),
-    ]),
-
-    profitability: average([
-      roeScore(f.roe),
-      roaScore(f.roa),
-    ]),
-
-    asset_quality: average([
-      npaScore(
-        f.gross_npa,
-        "gross"
-      ),
-
-      npaScore(
-        f.net_npa,
-        "net"
-      ),
-    ]),
-
-    capital: capitalScore(
-      capital
-    ),
-
-    valuation: valuationScore(
-      f.pe_ratio,
-      f.pb_ratio
-    ),
-
-    ownership: promoterScore(
-      f.promoter_holding
-    ),
-  };
-
-  const weights = {
-    growth: 20,
-    profitability: 25,
-    asset_quality: 20,
-    capital: 15,
-    valuation: 10,
-    ownership: 10,
-  };
-
-  let weightedTotal = 0;
-  let availableWeight = 0;
-
-  for (const [key, weight] of Object.entries(weights)) {
-    const component = components[key];
-
-    if (component !== null) {
-      weightedTotal +=
-        component * weight;
-
-      availableWeight += weight;
-    }
-  }
-
-  if (!availableWeight) {
-    return {
-      score: null,
-      confidence: 0,
-      components,
-    };
-  }
-
-  return {
-    score: Math.round(
-      clamp(
-        weightedTotal /
-          availableWeight
-      )
-    ),
-
-    confidence: Math.round(
-      availableWeight
-    ),
-
-    components,
-  };
-}
-
-/* =========================================================
-   RATING
-========================================================= */
-
-function getRating(
-  score,
-  confidence,
+// ============================================================
+// DATA CONFIDENCE
+// ============================================================
+
+function confidenceFromCompleteness(
   completeness
 ) {
   if (
-    score === null ||
-    completeness < 30 ||
-    confidence < 30
+    completeness === null
+  ) {
+    return 0;
+  }
+
+  if (
+    completeness < 30
+  ) {
+    return 0;
+  }
+
+  if (
+    completeness < 50
+  ) {
+    return 40;
+  }
+
+  if (
+    completeness < 60
+  ) {
+    return 50;
+  }
+
+  if (
+    completeness < 70
+  ) {
+    return 60;
+  }
+
+  if (
+    completeness < 80
+  ) {
+    return 69;
+  }
+
+  if (
+    completeness < 90
+  ) {
+    return 80;
+  }
+
+  return 100;
+}
+
+// ============================================================
+// SECTOR WEIGHTS
+// ============================================================
+
+function getWeights(
+  sector
+) {
+  switch (sector) {
+    case "BANK":
+      return {
+        growth: 0.18,
+        profitability: 0.20,
+        balance: 0.17,
+        cash: 0.05,
+        ownership: 0.10,
+        valuation: 0.15,
+        risk: 0.15,
+      };
+
+    case "TECHNOLOGY":
+      return {
+        growth: 0.22,
+        profitability: 0.22,
+        balance: 0.12,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.14,
+        risk: 0.10,
+      };
+
+    case "PHARMA_HEALTHCARE":
+      return {
+        growth: 0.20,
+        profitability: 0.20,
+        balance: 0.15,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "DEFENCE":
+      return {
+        growth: 0.22,
+        profitability: 0.20,
+        balance: 0.14,
+        cash: 0.10,
+        ownership: 0.09,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "AUTOMOBILE":
+      return {
+        growth: 0.18,
+        profitability: 0.20,
+        balance: 0.15,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.17,
+        risk: 0.10,
+      };
+
+    case "CONSTRUCTION_INFRA":
+      return {
+        growth: 0.20,
+        profitability: 0.18,
+        balance: 0.17,
+        cash: 0.10,
+        ownership: 0.10,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "ENERGY":
+      return {
+        growth: 0.18,
+        profitability: 0.18,
+        balance: 0.17,
+        cash: 0.12,
+        ownership: 0.10,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "METALS_MINING":
+      return {
+        growth: 0.18,
+        profitability: 0.18,
+        balance: 0.18,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.16,
+        risk: 0.10,
+      };
+
+    case "CHEMICALS":
+      return {
+        growth: 0.20,
+        profitability: 0.20,
+        balance: 0.15,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "CONSUMER":
+      return {
+        growth: 0.18,
+        profitability: 0.22,
+        balance: 0.15,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    case "FINANCIAL":
+      return {
+        growth: 0.18,
+        profitability: 0.20,
+        balance: 0.17,
+        cash: 0.05,
+        ownership: 0.10,
+        valuation: 0.15,
+        risk: 0.15,
+      };
+
+    case "INDUSTRIAL":
+      return {
+        growth: 0.18,
+        profitability: 0.20,
+        balance: 0.17,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.15,
+        risk: 0.10,
+      };
+
+    default:
+      return {
+        growth: 0.18,
+        profitability: 0.18,
+        balance: 0.16,
+        cash: 0.12,
+        ownership: 0.08,
+        valuation: 0.15,
+        risk: 0.13,
+      };
+  }
+}
+
+// ============================================================
+// COMPONENT CALCULATION
+// ============================================================
+
+function calculateFinalScore({
+  weights,
+  growth,
+  profitability,
+  balance,
+  cash,
+  ownership,
+  valuation,
+  risk,
+}) {
+  const components = [
+    {
+      name: "growth",
+      value: growth,
+      weight: weights.growth,
+    },
+    {
+      name: "profitability",
+      value: profitability,
+      weight: weights.profitability,
+    },
+    {
+      name: "balance",
+      value: balance,
+      weight: weights.balance,
+    },
+    {
+      name: "cash",
+      value: cash,
+      weight: weights.cash,
+    },
+    {
+      name: "ownership",
+      value: ownership,
+      weight: weights.ownership,
+    },
+    {
+      name: "valuation",
+      value: valuation,
+      weight: weights.valuation,
+    },
+    {
+      name: "risk",
+      value: risk,
+      weight: weights.risk,
+    },
+  ];
+
+  let weightedTotal = 0;
+  let usedWeight = 0;
+
+  for (
+    const component of components
+  ) {
+    if (
+      component.value === null
+    ) {
+      continue;
+    }
+
+    weightedTotal +=
+      component.value *
+      component.weight;
+
+    usedWeight +=
+      component.weight;
+  }
+
+  if (
+    usedWeight === 0
+  ) {
+    return null;
+  }
+
+  // ----------------------------------------------------------
+  // IMPORTANT:
+  // Missing components are NOT allowed to inflate the score.
+  //
+  // Instead of simply renormalizing missing weights to 100,
+  // we apply a coverage penalty.
+  // ----------------------------------------------------------
+
+  const rawScore =
+    weightedTotal /
+    usedWeight;
+
+  const coverage =
+    usedWeight;
+
+  const coveragePenalty =
+    0.65 +
+    0.35 * coverage;
+
+  const adjustedScore =
+    rawScore *
+    coveragePenalty;
+
+  return clamp(
+    round(adjustedScore)
+  );
+}
+
+// ============================================================
+// RATING
+// ============================================================
+
+function getRating(
+  score,
+  confidence
+) {
+  if (
+    score === null
   ) {
     return "INSUFFICIENT_DATA";
   }
 
-  if (completeness < 50) {
+  if (
+    confidence !== null &&
+    confidence < 50
+  ) {
     return "PROVISIONAL";
   }
 
-  if (score >= 85) return "EXCELLENT";
-  if (score >= 70) return "GOOD";
-  if (score >= 55) return "AVERAGE";
+  if (score >= 90)
+    return "EXCEPTIONAL";
 
-  return "WEAK";
+  if (score >= 80)
+    return "STRONG";
+
+  if (score >= 70)
+    return "GOOD";
+
+  if (score >= 60)
+    return "AVERAGE";
+
+  if (score >= 50)
+    return "WEAK";
+
+  return "POOR";
 }
 
-/* =========================================================
-   ACTION
-========================================================= */
+// ============================================================
+// RISK LABEL
+// ============================================================
 
-function getAction(
-  score,
-  confidence,
+function getRiskLevel(
+  risk,
   completeness
 ) {
   if (
-    score === null ||
-    completeness < 30 ||
-    confidence < 30
+    completeness !== null &&
+    completeness < 50
+  ) {
+    return "HIGH";
+  }
+
+  if (
+    risk === null
+  ) {
+    return "HIGH";
+  }
+
+  if (risk >= 75)
+    return "LOW";
+
+  if (risk >= 55)
+    return "MODERATE";
+
+  return "HIGH";
+}
+
+// ============================================================
+// ACTION ENGINE
+// ============================================================
+
+function getAction({
+  score,
+  confidence,
+  completeness,
+  risk,
+  valuation,
+}) {
+  // ----------------------------------------------------------
+  // No score
+  // ----------------------------------------------------------
+
+  if (
+    score === null
   ) {
     return "WAIT";
   }
 
-  /*
-    Partial data can never generate
-    an aggressive BUY signal.
-  */
+  // ----------------------------------------------------------
+  // Very incomplete
+  // ----------------------------------------------------------
 
-  if (completeness < 50) {
-    return score >= 70
-      ? "WATCH"
-      : "WAIT";
+  if (
+    completeness < 30
+  ) {
+    return "WAIT";
   }
 
-  /*
-    50-79% data:
-    BUY requires stronger evidence.
-  */
+  // ----------------------------------------------------------
+  // Provisional data
+  // ----------------------------------------------------------
 
-  if (completeness < 80) {
-    if (score >= 90) return "BUY";
-    if (score >= 70) return "HOLD";
-    if (score >= 55) return "WATCH";
+  if (
+    completeness < 50 ||
+    confidence < 50
+  ) {
+    if (
+      score >= 70
+    ) {
+      return "WATCH";
+    }
+
+    return "WAIT";
+  }
+
+  // ----------------------------------------------------------
+  // High risk prevents aggressive BUY
+  // ----------------------------------------------------------
+
+  if (
+    risk !== null &&
+    risk < 45
+  ) {
+    if (
+      score >= 70
+    ) {
+      return "WATCH";
+    }
 
     return "REDUCE";
   }
 
-  /*
-    80%+ data.
-  */
+  // ----------------------------------------------------------
+  // BUY requires valuation
+  // ----------------------------------------------------------
 
-  if (score >= 85) return "BUY";
-  if (score >= 70) return "HOLD";
-  if (score >= 55) return "WATCH";
+  if (
+    score >= 85 &&
+    confidence >= 80 &&
+    completeness >= 80 &&
+    valuation !== null &&
+    valuation >= 45 &&
+    risk >= 55
+  ) {
+    return "BUY";
+  }
+
+  // ----------------------------------------------------------
+  // Strong score but insufficient valuation
+  // ----------------------------------------------------------
+
+  if (
+    score >= 80
+  ) {
+    return "WATCH";
+  }
+
+  // ----------------------------------------------------------
+  // Good
+  // ----------------------------------------------------------
+
+  if (
+    score >= 70
+  ) {
+    return "HOLD";
+  }
+
+  // ----------------------------------------------------------
+  // Average
+  // ----------------------------------------------------------
+
+  if (
+    score >= 60
+  ) {
+    return "WATCH";
+  }
+
+  // ----------------------------------------------------------
+  // Weak
+  // ----------------------------------------------------------
+
+  if (
+    score >= 50
+  ) {
+    return "REDUCE";
+  }
 
   return "REDUCE";
 }
 
-/* =========================================================
-   RISK
-========================================================= */
+// ============================================================
+// DATA REASONS
+// ============================================================
 
-function getRisk(
-  score,
+function buildNotes({
+  sector,
   completeness,
-  f
-) {
-  if (
-    score === null ||
-    completeness < 30
-  ) {
-    return "HIGH";
-  }
-
-  if (completeness < 50) {
-    return "HIGH";
-  }
-
-  let risk = "MODERATE";
-
-  if (score >= 75) {
-    risk = "LOW";
-  }
-
-  if (score < 55) {
-    risk = "HIGH";
-  }
-
-  /*
-    Very weak profitability
-    increases risk.
-  */
-
-  const roe = num(f.roe);
+  confidence,
+  valuation,
+  pe,
+  pb,
+  growth,
+  profitability,
+  risk,
+}) {
+  const notes = [];
 
   if (
-    roe !== null &&
-    roe < 5
+    completeness < 80
   ) {
-    risk = "HIGH";
+    notes.push(
+      `Fundamental data completeness is ${completeness}%.`
+    );
   }
 
-  return risk;
+  if (
+    confidence < 80
+  ) {
+    notes.push(
+      `Confidence is limited to ${confidence}%.`
+    );
+  }
+
+  if (
+    valuation === null
+  ) {
+    notes.push(
+      "Valuation is unavailable and therefore cannot support a BUY decision."
+    );
+  }
+
+  if (
+    pe !== null &&
+    pe <= 0
+  ) {
+    notes.push(
+      "PE is non-positive; valuation is not treated as cheap on PE."
+    );
+  }
+
+  if (
+    pb !== null &&
+    pb <= 0
+  ) {
+    notes.push(
+      "PB is non-positive and is excluded from valuation scoring."
+    );
+  }
+
+  if (
+    growth !== null &&
+    growth >= 80
+  ) {
+    notes.push(
+      "Growth metrics are strong."
+    );
+  }
+
+  if (
+    profitability !== null &&
+    profitability >= 80
+  ) {
+    notes.push(
+      "Profitability metrics are strong."
+    );
+  }
+
+  if (
+    risk !== null &&
+    risk < 55
+  ) {
+    notes.push(
+      "Risk profile is elevated."
+    );
+  }
+
+  if (
+    sector === "OTHER"
+  ) {
+    notes.push(
+      "Sector remains unclassified; sector-specific weighting is limited."
+    );
+  }
+
+  return notes;
 }
 
-/* =========================================================
-   POST
-========================================================= */
+// ============================================================
+// MAIN
+// ============================================================
 
-export async function POST() {
+export async function GET() {
   try {
-    /*
-      GET HOLDINGS
-    */
+    // ========================================================
+    // 1. HOLDINGS
+    // ========================================================
 
     const {
       data: holdings,
       error: holdingsError,
     } = await supabase
       .from("holdings")
-      .select("instrument_id");
+      .select(
+        "instrument_id"
+      );
 
     if (holdingsError) {
-      throw holdingsError;
+      throw new Error(
+        `Holdings query failed: ${holdingsError.message}`
+      );
     }
-
-    if (!holdings?.length) {
-      return NextResponse.json({
-        success: true,
-        message: "No holdings found.",
-      });
-    }
-
-    /*
-      UNIQUE INSTRUMENTS
-    */
 
     const instrumentIds = [
       ...new Set(
-        holdings
+        (holdings || [])
           .map(
             (h) =>
               h.instrument_id
@@ -860,28 +1331,51 @@ export async function POST() {
       ),
     ];
 
-    /*
-      INSTRUMENTS
-    */
+    if (
+      instrumentIds.length === 0
+    ) {
+      return NextResponse.json({
+        success: true,
+        engine_version:
+          ENGINE_VERSION,
+        message:
+          "No holdings found.",
+        scored: 0,
+      });
+    }
+
+    // ========================================================
+    // 2. INSTRUMENTS
+    // ========================================================
 
     const {
       data: instruments,
       error: instrumentsError,
     } = await supabase
       .from("instruments")
-      .select("*")
-      .in("id", instrumentIds);
+      .select(`
+        id,
+        symbol,
+        company_name,
+        sector
+      `)
+      .in(
+        "id",
+        instrumentIds
+      );
 
     if (instrumentsError) {
-      throw instrumentsError;
+      throw new Error(
+        `Instruments query failed: ${instrumentsError.message}`
+      );
     }
 
-    /*
-      FUNDAMENTALS
-    */
+    // ========================================================
+    // 3. FUNDAMENTALS
+    // ========================================================
 
     const {
-      data: fundamentalsRows,
+      data: fundamentals,
       error: fundamentalsError,
     } = await supabase
       .from("fundamentals")
@@ -892,75 +1386,120 @@ export async function POST() {
       );
 
     if (fundamentalsError) {
-      throw fundamentalsError;
+      throw new Error(
+        `Fundamentals query failed: ${fundamentalsError.message}`
+      );
     }
 
-    const fundamentalsMap =
+    const instrumentMap =
       new Map(
-        (fundamentalsRows || []).map(
-          (f) => [
-            f.instrument_id,
-            f,
+        (instruments || []).map(
+          (item) => [
+            item.id,
+            item,
           ]
         )
       );
 
-    /*
-      SUMMARY
-    */
+    const fundamentalsMap =
+      new Map(
+        (fundamentals || []).map(
+          (item) => [
+            item.instrument_id,
+            item,
+          ]
+        )
+      );
+
+    // ========================================================
+    // 4. EXISTING AI SCORES
+    // ========================================================
+
+    const {
+      data: existingScores,
+      error: existingScoresError,
+    } = await supabase
+      .from("ai_scores")
+      .select(
+        "instrument_id"
+      )
+      .in(
+        "instrument_id",
+        instrumentIds
+      );
+
+    if (existingScoresError) {
+      throw new Error(
+        `AI scores query failed: ${existingScoresError.message}`
+      );
+    }
+
+    const existingScoreIds =
+      new Set(
+        (existingScores || [])
+          .map(
+            (item) =>
+              item.instrument_id
+          )
+      );
+
+    // ========================================================
+    // 5. PROCESS
+    // ========================================================
 
     const results = [];
 
     let scored = 0;
     let provisional = 0;
     let blocked = 0;
-    let skipped = 0;
+    let skippedFunds = 0;
     let errors = 0;
 
-    /*
-      PROCESS
-    */
-
-    for (const instrument of instruments || []) {
+    for (
+      const instrumentId of instrumentIds
+    ) {
       try {
-        const instrumentId =
-          instrument.id;
+        const instrument =
+          instrumentMap.get(
+            instrumentId
+          );
 
-        const securityType =
-          String(
-            instrument.security_type ||
-              ""
-          ).toUpperCase();
+        if (!instrument) {
+          continue;
+        }
 
         const rawSector =
           instrument.sector ||
-          "OTHER";
+          "";
 
         const sector =
           normalizeSector(
             rawSector
           );
 
-        /*
-          MF handled separately.
-        */
+        // ----------------------------------------------------
+        // Mutual funds
+        // ----------------------------------------------------
 
         if (
-          securityType === "FUND" ||
-          sector === "FUND"
+          sector === "FUND" ||
+          String(
+            rawSector
+          )
+            .toUpperCase()
+            .includes("MUTUAL")
         ) {
-          skipped++;
+          skippedFunds++;
 
           results.push({
             instrument_id:
               instrumentId,
 
-            company_name:
-              instrument.company_name ||
-              instrument.name,
+            symbol:
+              instrument.symbol,
 
-            raw_sector:
-              rawSector,
+            company_name:
+              instrument.company_name,
 
             status:
               "SKIPPED_FUND",
@@ -974,446 +1513,999 @@ export async function POST() {
             instrumentId
           ) || {};
 
-        /*
-          DATA HEALTH
-        */
+        // ----------------------------------------------------
+        // Fundamentals
+        // ----------------------------------------------------
 
-        const completeness =
-          calculateCompleteness(
+        const salesGrowth =
+          getField(
             f,
-            sector
+            [
+              "sales_growth",
+              "revenue_growth",
+              "sales_growth_yoy",
+            ]
           );
 
-        /*
-          BELOW 30%:
-          NO SCORE
-        */
+        const profitGrowth =
+          getField(
+            f,
+            [
+              "profit_growth",
+              "profit_growth_yoy",
+              "net_profit_growth",
+            ]
+          );
+
+        const roe =
+          getField(
+            f,
+            [
+              "roe",
+              "return_on_equity",
+            ]
+          );
+
+        const roce =
+          getField(
+            f,
+            [
+              "roce",
+              "return_on_capital_employed",
+            ]
+          );
+
+        const debtEquity =
+          getField(
+            f,
+            [
+              "debt_to_equity",
+              "debt_equity",
+              "debt_equity_ratio",
+            ]
+          );
+
+        const operatingCashFlow =
+          getField(
+            f,
+            [
+              "operating_cash_flow",
+              "ocf",
+              "cash_from_operations",
+            ]
+          );
+
+        const promoter =
+          getField(
+            f,
+            [
+              "promoter_holding",
+              "promoter",
+              "promoter_percentage",
+            ]
+          );
+
+        const fii =
+          getField(
+            f,
+            [
+              "fii_holding",
+              "fii",
+              "fii_percentage",
+            ]
+          );
+
+        const dii =
+          getField(
+            f,
+            [
+              "dii_holding",
+              "dii",
+              "dii_percentage",
+            ]
+          );
+
+        const pe =
+          getField(
+            f,
+            [
+              "pe_ratio",
+              "pe",
+            ]
+          );
+
+        const pb =
+          getField(
+            f,
+            [
+              "pb_ratio",
+              "pb",
+            ]
+          );
+
+        const marketCap =
+          getField(
+            f,
+            [
+              "market_cap",
+            ]
+          );
+
+        // ----------------------------------------------------
+        // Component scores
+        // ----------------------------------------------------
+
+        const growth =
+          growthScore(
+            salesGrowth,
+            profitGrowth
+          );
+
+        const profitability =
+          profitabilityScore(
+            roe,
+            roce
+          );
+
+        const balance =
+          balanceScore(
+            debtEquity
+          );
+
+        const cash =
+          cashFlowScore(
+            operatingCashFlow,
+            marketCap
+          );
+
+        const ownership =
+          ownershipScore(
+            promoter,
+            fii,
+            dii
+          );
+
+        const valuation =
+          valuationScore(
+            pe,
+            pb
+          );
+
+        const risk =
+          riskScore({
+            debtEquity,
+            profitGrowth,
+            roe,
+            pe,
+            valuation,
+            sector,
+          });
+
+        // ----------------------------------------------------
+        // Completeness
+        // ----------------------------------------------------
+
+        const completeness =
+          calculateCompleteness({
+            sector,
+            salesGrowth,
+            profitGrowth,
+            roe,
+            roce,
+            debtEquity,
+            operatingCashFlow,
+            promoter,
+            fii,
+            dii,
+            pe,
+            pb,
+          });
+
+        const confidence =
+          confidenceFromCompleteness(
+            completeness
+          );
+
+        // ----------------------------------------------------
+        // BLOCK
+        // ----------------------------------------------------
 
         if (
           completeness < 30
         ) {
           blocked++;
 
-          const {
-            error: saveError,
-          } = await supabase
-            .from("ai_scores")
-            .upsert(
-              {
-                instrument_id:
-                  instrumentId,
-
-                total_score: null,
-
-                rating:
-                  "INSUFFICIENT_DATA",
-
-                action: "WAIT",
-
-                risk_level: "HIGH",
-
-                updated_at:
-                  new Date().toISOString(),
-
-                score_breakdown: {
-                  engine:
-                    "safe_v3",
-
-                  raw_sector:
-                    rawSector,
-
-                  normalized_sector:
-                    sector,
-
-                  score_available:
-                    false,
-
-                  data_status:
-                    "BLOCKED",
-
-                  data_completeness:
-                    completeness,
-
-                  confidence: 0,
-
-                  reason:
-                    "Fundamental data completeness is below 30%.",
-                },
-              },
-              {
-                onConflict:
-                  "instrument_id",
-              }
-            );
-
-          if (saveError) {
-            throw saveError;
-          }
-
           results.push({
             instrument_id:
               instrumentId,
 
+            symbol:
+              instrument.symbol,
+
             company_name:
-              instrument.company_name ||
-              instrument.name,
+              instrument.company_name,
 
-            sector,
+            raw_sector:
+              rawSector,
 
-            completeness,
+            normalized_sector:
+              sector,
 
-            status: "BLOCKED",
+            status:
+              "BLOCKED",
+
+            total_score:
+              null,
+
+            rating:
+              "INSUFFICIENT_DATA",
+
+            action:
+              "WAIT",
+
+            risk_level:
+              "HIGH",
+
+            score_breakdown: {
+              engine:
+                ENGINE_VERSION,
+
+              data_status:
+                "BLOCKED",
+
+              score_available:
+                false,
+
+              data_completeness:
+                completeness,
+
+              confidence,
+
+              raw_sector:
+                rawSector,
+
+              normalized_sector:
+                sector,
+
+              reason:
+                "Fundamental data completeness is below 30%.",
+            },
           });
 
           continue;
         }
 
-        /*
-          SECTOR ENGINE
-        */
+        // ----------------------------------------------------
+        // Weights
+        // ----------------------------------------------------
 
-        const scoring =
-          sector === "BANK"
-            ? calculateBankScore(f)
-            : calculateGenericScore(
-                f,
-                sector
-              );
-
-        /*
-          Confidence cannot exceed
-          actual data completeness.
-        */
-
-        let confidence =
-          Math.min(
-            scoring.confidence,
-            completeness
+        const weights =
+          getWeights(
+            sector
           );
 
-        /*
-          Confidence caps
-        */
+        // ----------------------------------------------------
+        // Final score
+        // ----------------------------------------------------
+
+        let totalScore =
+          calculateFinalScore({
+            weights,
+
+            growth,
+
+            profitability,
+
+            balance,
+
+            cash,
+
+            ownership,
+
+            valuation,
+
+            risk,
+          });
+
+        // ----------------------------------------------------
+        // Confidence adjustment
+        //
+        // V4 deliberately applies an additional ceiling.
+        // ----------------------------------------------------
 
         if (
-          completeness < 50
+          totalScore !== null
         ) {
-          confidence =
-            Math.min(
-              confidence,
-              49
-            );
-        } else if (
-          completeness < 80
-        ) {
-          confidence =
-            Math.min(
-              confidence,
-              69
-            );
-        } else {
-          confidence =
-            Math.min(
-              confidence,
-              100
-            );
+          if (
+            confidence < 50
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                69
+              );
+          }
+
+          else if (
+            confidence < 60
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                74
+              );
+          }
+
+          else if (
+            confidence < 70
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                79
+              );
+          }
+
+          else if (
+            confidence < 80
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                84
+              );
+          }
         }
 
-        const score =
-          scoring.score;
+        // ----------------------------------------------------
+        // Risk adjustment
+        //
+        // High risk should materially constrain score.
+        // ----------------------------------------------------
 
-        /*
-          FINAL DECISION
-        */
+        if (
+          totalScore !== null &&
+          risk !== null
+        ) {
+          if (
+            risk < 40
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                64
+              );
+          }
 
-        const rating =
-          getRating(
-            score,
-            confidence,
-            completeness
-          );
+          else if (
+            risk < 50
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                69
+              );
+          }
 
-        const action =
-          getAction(
-            score,
-            confidence,
-            completeness
-          );
+          else if (
+            risk < 60
+          ) {
+            totalScore =
+              Math.min(
+                totalScore,
+                79
+              );
+          }
+        }
 
-        const risk =
-          getRisk(
-            score,
-            completeness,
-            f
-          );
+        totalScore =
+          totalScore === null
+            ? null
+            : clamp(
+                round(
+                  totalScore
+                )
+              );
+
+        // ----------------------------------------------------
+        // Status
+        // ----------------------------------------------------
+
+        let dataStatus =
+          "COMPLETE";
 
         if (
           completeness < 50
         ) {
+          dataStatus =
+            "PROVISIONAL";
+
           provisional++;
-        } else {
+        }
+
+        else if (
+          completeness < 80
+        ) {
+          dataStatus =
+            "PARTIAL";
+        }
+
+        else {
           scored++;
         }
 
-        /*
-          SAVE
-        */
+        // ----------------------------------------------------
+        // Risk
+        // ----------------------------------------------------
+
+        const riskLevel =
+          getRiskLevel(
+            risk,
+            completeness
+          );
+
+        // ----------------------------------------------------
+        // Action
+        // ----------------------------------------------------
+
+        const action =
+          getAction({
+            score:
+              totalScore,
+
+            confidence,
+
+            completeness,
+
+            risk,
+
+            valuation,
+          });
+
+        // ----------------------------------------------------
+        // Rating
+        // ----------------------------------------------------
+
+        const rating =
+          getRating(
+            totalScore,
+            confidence
+          );
+
+        // ----------------------------------------------------
+        // Notes
+        // ----------------------------------------------------
+
+        const notes =
+          buildNotes({
+            sector,
+
+            completeness,
+
+            confidence,
+
+            valuation,
+
+            pe,
+
+            pb,
+
+            growth,
+
+            profitability,
+
+            risk,
+          });
+
+        // ----------------------------------------------------
+        // Diagnostics
+        // ----------------------------------------------------
+
+        const diagnostics = [];
+
+        if (
+          completeness < 80
+        ) {
+          diagnostics.push(
+            "PARTIAL_DATA"
+          );
+        }
+
+        if (
+          confidence < 80
+        ) {
+          diagnostics.push(
+            "LOW_CONFIDENCE"
+          );
+        }
+
+        if (
+          valuation === null
+        ) {
+          diagnostics.push(
+            "VALUATION_MISSING"
+          );
+        }
+
+        if (
+          pe !== null &&
+          pe <= 0
+        ) {
+          diagnostics.push(
+            "NON_POSITIVE_PE"
+          );
+        }
+
+        if (
+          riskLevel === "HIGH"
+        ) {
+          diagnostics.push(
+            "HIGH_RISK"
+          );
+        }
+
+        if (
+          sector === "OTHER"
+        ) {
+          diagnostics.push(
+            "SECTOR_UNCLASSIFIED"
+          );
+        }
+
+        if (
+          totalScore !== null &&
+          totalScore >= 85 &&
+          confidence < 80
+        ) {
+          diagnostics.push(
+            "HIGH_SCORE_LOW_CONFIDENCE"
+          );
+        }
+
+        if (
+          action === "BUY" &&
+          (
+            confidence < 80 ||
+            valuation === null
+          )
+        ) {
+          diagnostics.push(
+            "BUY_REVIEW_REQUIRED"
+          );
+        }
+
+        // ----------------------------------------------------
+        // Score breakdown
+        // ----------------------------------------------------
+
+        const scoreBreakdown = {
+          engine:
+            ENGINE_VERSION,
+
+          raw_sector:
+            rawSector,
+
+          normalized_sector:
+            sector,
+
+          data_status:
+            dataStatus,
+
+          score_available:
+            true,
+
+          data_completeness:
+            completeness,
+
+          confidence,
+
+          components: {
+            growth:
+              growth,
+
+            profitability:
+              profitability,
+
+            balance:
+              balance,
+
+            cash:
+              cash,
+
+            ownership:
+              ownership,
+
+            valuation:
+              valuation,
+
+            risk:
+              risk,
+          },
+
+          valuation: {
+            pe:
+              pe,
+
+            pb:
+              pb,
+
+            valuation_score:
+              valuation,
+          },
+
+          weights,
+
+          raw_inputs: {
+            sales_growth:
+              salesGrowth,
+
+            profit_growth:
+              profitGrowth,
+
+            roe,
+
+            roce,
+
+            debt_equity:
+              debtEquity,
+
+            operating_cash_flow:
+              operatingCashFlow,
+
+            promoter,
+
+            fii,
+
+            dii,
+
+            pe,
+
+            pb,
+          },
+
+          diagnostics,
+
+          notes,
+
+          rules: {
+            missing_metrics:
+              "Missing metrics are never awarded a perfect score.",
+
+            missing_valuation:
+              "Missing valuation is N/A and reduces score coverage.",
+
+            negative_pe:
+              "Negative or zero PE is not treated as cheap.",
+
+            partial_data:
+              "Partial data is explicitly penalized.",
+
+            buy_rule:
+              "BUY requires score >=85, confidence >=80, completeness >=80, valuation available and acceptable risk.",
+
+            risk_rule:
+              "High risk constrains the maximum score.",
+
+            confidence_rule:
+              "Confidence ceilings prevent incomplete datasets from producing extreme scores.",
+          },
+        };
+
+        // ----------------------------------------------------
+        // UPSERT AI SCORE
+        // ----------------------------------------------------
+
+        const payload = {
+          instrument_id:
+            instrumentId,
+
+          total_score:
+            totalScore,
+
+          rating,
+
+          action,
+
+          risk_level:
+            riskLevel,
+
+          score_breakdown:
+            scoreBreakdown,
+
+          updated_at:
+            new Date().toISOString(),
+        };
 
         const {
-          error: saveError,
+          error: upsertError,
         } = await supabase
           .from("ai_scores")
           .upsert(
-            {
-              instrument_id:
-                instrumentId,
-
-              total_score:
-                score,
-
-              rating,
-
-              action,
-
-              risk_level:
-                risk,
-
-              updated_at:
-                new Date().toISOString(),
-
-              score_breakdown: {
-                engine:
-                  "safe_v3",
-
-                raw_sector:
-                  rawSector,
-
-                normalized_sector:
-                  sector,
-
-                score_available:
-                  score !== null,
-
-                data_status:
-                  completeness >= 80
-                    ? "COMPLETE"
-                    : completeness >=
-                      50
-                    ? "PARTIAL"
-                    : "PROVISIONAL",
-
-                data_completeness:
-                  completeness,
-
-                confidence,
-
-                components:
-                  scoring.components,
-
-                valuation: {
-                  pe:
-                    num(
-                      f.pe_ratio
-                    ),
-
-                  pb:
-                    num(
-                      f.pb_ratio
-                    ),
-
-                  valuation_score:
-                    valuationScore(
-                      f.pe_ratio,
-                      f.pb_ratio
-                    ),
-                },
-
-                notes: [
-                  "Sector is normalized before scoring.",
-                  "Missing metrics are excluded instead of treated as zero.",
-                  "Confidence is capped by actual data completeness.",
-                  "Partial data cannot generate an aggressive BUY signal unless evidence is exceptionally strong.",
-                  "Below 30% completeness is blocked.",
-                  "Mutual funds are handled separately.",
-                ],
-              },
-            },
+            payload,
             {
               onConflict:
                 "instrument_id",
             }
           );
 
-        if (saveError) {
-          throw saveError;
+        if (
+          upsertError
+        ) {
+          throw new Error(
+            `AI score upsert failed: ${upsertError.message}`
+          );
         }
 
         results.push({
           instrument_id:
             instrumentId,
 
+          symbol:
+            instrument.symbol,
+
           company_name:
-            instrument.company_name ||
-            instrument.name,
+            instrument.company_name,
 
           raw_sector:
             rawSector,
 
-          sector,
+          normalized_sector:
+            sector,
 
-          score,
+          status:
+            dataStatus,
+
+          total_score:
+            totalScore,
 
           rating,
 
           action,
 
-          risk,
+          risk_level:
+            riskLevel,
 
           completeness,
 
           confidence,
 
-          status:
-            completeness < 50
-              ? "PROVISIONAL"
-              : "SCORED",
+          components: {
+            growth,
+            profitability,
+            balance,
+            cash,
+            ownership,
+            valuation,
+            risk,
+          },
+
+          diagnostics,
+
+          valuation: {
+            pe,
+            pb,
+            score:
+              valuation,
+          },
         });
-      } catch (error) {
+
+      } catch (instrumentError) {
         errors++;
 
         results.push({
           instrument_id:
-            instrument.id,
+            instrumentId,
 
-          company_name:
-            instrument.company_name ||
-            instrument.name,
-
-          status: "ERROR",
+          status:
+            "ERROR",
 
           error:
-            error?.message ||
-            "Unknown error",
+            instrumentError?.message ||
+            "Unknown instrument error",
         });
       }
     }
 
-    /*
-      SUMMARY
-    */
+    // ========================================================
+    // SUMMARY
+    // ========================================================
 
-    const validScores =
-      results
-        .map((r) => r.score)
-        .filter(
-          (v) =>
-            typeof v ===
-              "number" &&
-            Number.isFinite(v)
-        );
+    const scoredResults =
+      results.filter(
+        (item) =>
+          item.total_score !==
+            null &&
+          item.total_score !==
+            undefined
+      );
 
     const averageScore =
-      validScores.length
-        ? Math.round(
-            validScores.reduce(
-              (a, b) =>
-                a + b,
-              0
-            ) /
-              validScores.length
+      scoredResults.length
+        ? round(
+            average(
+              scoredResults.map(
+                (item) =>
+                  item.total_score
+              )
+            ),
+            2
           )
         : null;
 
-    const actions = {};
+    const actionCounts = {};
 
-    const ratings = {};
-
-    const risks = {};
-
-    const sectors = {};
-
-    results.forEach((r) => {
-      if (r.action) {
-        actions[r.action] =
-          (actions[r.action] ||
-            0) + 1;
+    for (
+      const item of results
+    ) {
+      if (
+        !item.action
+      ) {
+        continue;
       }
 
-      if (r.rating) {
-        ratings[r.rating] =
-          (ratings[r.rating] ||
-            0) + 1;
+      actionCounts[
+        item.action
+      ] =
+        (
+          actionCounts[
+            item.action
+          ] || 0
+        ) + 1;
+    }
+
+    const ratingCounts = {};
+
+    for (
+      const item of results
+    ) {
+      if (
+        !item.rating
+      ) {
+        continue;
       }
 
-      if (r.risk) {
-        risks[r.risk] =
-          (risks[r.risk] ||
-            0) + 1;
+      ratingCounts[
+        item.rating
+      ] =
+        (
+          ratingCounts[
+            item.rating
+          ] || 0
+        ) + 1;
+    }
+
+    const riskCounts = {};
+
+    for (
+      const item of results
+    ) {
+      if (
+        !item.risk_level
+      ) {
+        continue;
       }
 
-      if (r.sector) {
-        sectors[r.sector] =
-          (sectors[r.sector] ||
-            0) + 1;
-      }
-    });
+      riskCounts[
+        item.risk_level
+      ] =
+        (
+          riskCounts[
+            item.risk_level
+          ] || 0
+        ) + 1;
+    }
+
+    const buyCandidates =
+      results.filter(
+        (item) =>
+          item.action ===
+          "BUY"
+      );
+
+    const highScores =
+      results.filter(
+        (item) =>
+          item.total_score !==
+            null &&
+          item.total_score >=
+            85
+      );
+
+    const highScoreReview =
+      results.filter(
+        (item) =>
+          item.total_score !==
+            null &&
+          item.total_score >=
+            85 &&
+          (
+            item.confidence <
+              80 ||
+            item.completeness <
+              80 ||
+            item.diagnostics?.includes(
+              "VALUATION_MISSING"
+            )
+          )
+      );
+
+    // ========================================================
+    // FINAL RESPONSE
+    // ========================================================
 
     return NextResponse.json({
-      success: true,
-
-      message:
-        "Portfolio scoring V3 completed successfully.",
+      success:
+        true,
 
       engine_version:
-        "safe_v3",
+        ENGINE_VERSION,
 
-      summary: {
-        holdings:
-          holdings.length,
+      holdings:
+        holdings?.length || 0,
 
-        unique_instruments:
-          instrumentIds.length,
+      unique_instruments:
+        instrumentIds.length,
 
-        scored,
+      scored:
+        scoredResults.length,
 
-        provisional,
+      provisional,
 
-        blocked,
+      blocked,
 
-        skipped,
+      skipped_funds:
+        skippedFunds,
 
-        errors,
+      errors,
 
-        average_score:
-          averageScore,
+      average_score:
+        averageScore,
 
-        actions,
+      action_counts:
+        actionCounts,
 
-        ratings,
+      rating_counts:
+        ratingCounts,
 
-        risks,
+      risk_counts:
+        riskCounts,
 
-        sectors,
-      },
+      buy_candidates:
+        buyCandidates.length,
+
+      high_score_count:
+        highScores.length,
+
+      high_score_review_count:
+        highScoreReview.length,
+
+      high_score_review:
+        highScoreReview,
 
       results,
     });
+
   } catch (error) {
     console.error(
-      "SAFE V3 SCORE ERROR:",
+      "Portfolio AI V4 error:",
       error
     );
 
     return NextResponse.json(
       {
-        success: false,
+        success:
+          false,
+
+        engine_version:
+          ENGINE_VERSION,
 
         error:
           error?.message ||
-          "Unknown server error",
+          "Unknown error",
       },
       {
-        status: 500,
+        status:
+          500,
       }
     );
   }
