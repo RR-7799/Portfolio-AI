@@ -1,8 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
 const ENGINE_VERSION = "upstox_fundamentals_v1_4";
-
 const UPSTOX_BASE_URL = "https://api.upstox.com/v2";
+
+/* =========================================================
+   SUPABASE
+========================================================= */
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -20,6 +23,10 @@ function getSupabase() {
   });
 }
 
+/* =========================================================
+   UPSTOX
+========================================================= */
+
 function getUpstoxHeaders() {
   const token = process.env.UPSTOX_ANALYTICS_TOKEN;
 
@@ -31,6 +38,55 @@ function getUpstoxHeaders() {
     Accept: "application/json",
     Authorization: `Bearer ${token}`,
   };
+}
+
+async function upstoxGet(endpoint) {
+  const startedAt = Date.now();
+
+  try {
+    const response = await fetch(
+      `${UPSTOX_BASE_URL}${endpoint}`,
+      {
+        method: "GET",
+        headers: getUpstoxHeaders(),
+        cache: "no-store",
+      }
+    );
+
+    const text = await response.text();
+
+    let json = null;
+
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      duration_ms: Date.now() - startedAt,
+      data: json,
+      error: response.ok
+        ? null
+        : (
+            json?.errors?.[0]?.message ||
+            json?.message ||
+            `HTTP ${response.status}`
+          ),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      duration_ms: Date.now() - startedAt,
+      data: null,
+      error:
+        error?.message ||
+        "Upstox request failed",
+    };
+  }
 }
 
 /* =========================================================
@@ -59,17 +115,19 @@ function toNumber(value) {
     return null;
   }
 
-  const n = Number(cleaned);
+  const parsed = Number(cleaned);
 
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(parsed)
+    ? parsed
+    : null;
 }
 
 function firstNumber(...values) {
   for (const value of values) {
-    const n = toNumber(value);
+    const parsed = toNumber(value);
 
-    if (n !== null) {
-      return n;
+    if (parsed !== null) {
+      return parsed;
     }
   }
 
@@ -131,10 +189,19 @@ function parsePeriodToDate(period) {
 
   const value = String(period).trim();
 
+  /*
+    Already YYYY-MM-DD
+  */
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value;
   }
 
+  /*
+    Examples:
+      Mar 2026
+      Jun 2026
+      March 2026
+  */
   const monthMap = {
     jan: "01",
     feb: "02",
@@ -180,14 +247,14 @@ function parsePeriodToDate(period) {
 }
 
 function periodTimestamp(period) {
-  const date = parsePeriodToDate(period);
+  const parsed = parsePeriodToDate(period);
 
-  if (!date) {
+  if (!parsed) {
     return 0;
   }
 
   const timestamp = Date.parse(
-    `${date}T00:00:00Z`
+    `${parsed}T00:00:00Z`
   );
 
   return Number.isFinite(timestamp)
@@ -196,7 +263,10 @@ function periodTimestamp(period) {
 }
 
 function latestHistoryValue(history) {
-  if (!Array.isArray(history) || !history.length) {
+  if (
+    !Array.isArray(history) ||
+    history.length === 0
+  ) {
     return null;
   }
 
@@ -209,8 +279,14 @@ function latestHistoryValue(history) {
     )[0] || null;
 }
 
-function previousHistoryValue(history, latestPeriod) {
-  if (!Array.isArray(history) || !history.length) {
+function previousHistoryValue(
+  history,
+  latestPeriod
+) {
+  if (
+    !Array.isArray(history) ||
+    history.length === 0
+  ) {
     return null;
   }
 
@@ -223,64 +299,14 @@ function previousHistoryValue(history, latestPeriod) {
     )
     .sort(
       (a, b) =>
-        periodTimestamp(b?.period) -
-        periodTimestamp(a?.period)
+        periodTimestamp(b.period) -
+        periodTimestamp(a.period)
     )[0] || null;
 }
 
 /* =========================================================
-   UPSTOX REQUEST
+   RESPONSE DATA
 ========================================================= */
-
-async function upstoxGet(endpoint) {
-  const startedAt = Date.now();
-
-  try {
-    const response = await fetch(
-      `${UPSTOX_BASE_URL}${endpoint}`,
-      {
-        method: "GET",
-        headers: getUpstoxHeaders(),
-        cache: "no-store",
-      }
-    );
-
-    const text = await response.text();
-
-    let json = null;
-
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = null;
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      duration_ms: Date.now() - startedAt,
-      data: json,
-
-      error: response.ok
-        ? null
-        : (
-            json?.errors?.[0]?.message ||
-            json?.message ||
-            `HTTP ${response.status}`
-          ),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: null,
-      duration_ms: Date.now() - startedAt,
-      data: null,
-      error:
-        error?.message ||
-        "Upstox request failed",
-    };
-  }
-}
 
 function getResponseData(response) {
   return response?.data ?? null;
@@ -389,31 +415,25 @@ function parseKeyRatios(response) {
 ========================================================= */
 
 function parseIncomeStatement(response) {
-  const data =
-    getResponseData(response);
+  const data = getResponseData(response);
 
-  const statementRows =
-    Array.isArray(
-      data?.income_statement
-    )
-      ? data.income_statement
-      : [];
+  const statementRows = Array.isArray(
+    data?.income_statement
+  )
+    ? data.income_statement
+    : [];
 
   function findCategory(possibleNames) {
-    return statementRows.find(
-      (row) => {
-        const normalized =
-          normalizeText(
-            row?.category
-          );
+    return statementRows.find((row) => {
+      const normalized =
+        normalizeText(row?.category);
 
-        return possibleNames.some(
-          (name) =>
-            normalized ===
-            normalizeText(name)
-        );
-      }
-    );
+      return possibleNames.some(
+        (name) =>
+          normalized ===
+          normalizeText(name)
+      );
+    });
   }
 
   const revenueRow = findCategory([
@@ -485,6 +505,9 @@ function parseIncomeStatement(response) {
       netProfitLatest?.period
     );
 
+  /*
+    Revenue is our canonical income-statement period.
+  */
   const latestPeriod =
     revenueLatest?.period ||
     operatingProfitLatest?.period ||
@@ -575,13 +598,13 @@ function parseIncomeStatement(response) {
 ========================================================= */
 
 function parseBalanceSheet(response) {
-  const data =
-    getResponseData(response);
+  const data = getResponseData(response);
 
-  const history =
-    Array.isArray(data?.history)
-      ? data.history
-      : [];
+  const history = Array.isArray(
+    data?.history
+  )
+    ? data.history
+    : [];
 
   const latest =
     latestHistoryValue(history);
@@ -599,6 +622,10 @@ function parseBalanceSheet(response) {
         latest?.total_liabilities
       ),
 
+    /*
+      Only use a direct D/E supplied by provider.
+      Do NOT derive D/E from total liabilities.
+    */
     debt_to_equity:
       firstNumber(
         latest?.debt_to_equity,
@@ -620,27 +647,25 @@ function parseCashFlow(response) {
     getResponseData(response);
 
   const categories =
-    Array.isArray(
-      data?.cash_flow
-    )
+    Array.isArray(data?.cash_flow)
       ? data.cash_flow
       : [];
 
-  function findCategory(possibleNames) {
-    return categories.find(
-      (row) => {
-        const normalized =
-          normalizeText(
-            row?.category
-          );
-
-        return possibleNames.some(
-          (name) =>
-            normalized ===
-            normalizeText(name)
+  function findCategory(
+    possibleNames
+  ) {
+    return categories.find((row) => {
+      const normalized =
+        normalizeText(
+          row?.category
         );
-      }
-    );
+
+      return possibleNames.some(
+        (name) =>
+          normalized ===
+          normalizeText(name)
+      );
+    });
   }
 
   const operatingRow =
@@ -713,20 +738,18 @@ function parseShareholding(response) {
   function findCategory(
     possibleNames
   ) {
-    return rows.find(
-      (row) => {
-        const normalized =
-          normalizeText(
-            row?.category
-          );
-
-        return possibleNames.some(
-          (name) =>
-            normalized ===
-            normalizeText(name)
+    return rows.find((row) => {
+      const normalized =
+        normalizeText(
+          row?.category
         );
-      }
-    );
+
+      return possibleNames.some(
+        (name) =>
+          normalized ===
+          normalizeText(name)
+      );
+    });
   }
 
   function latestCategory(
@@ -744,7 +767,9 @@ function parseShareholding(response) {
 
     return {
       value:
-        toNumber(latest?.value),
+        toNumber(
+          latest?.value
+        ),
 
       period:
         latest?.period ||
@@ -764,7 +789,7 @@ function parseShareholding(response) {
       "foreign institutional investors",
     ]);
 
-  const dii =
+  const directDii =
     latestCategory([
       "dii",
       "domestic institutional investors",
@@ -782,7 +807,7 @@ function parseShareholding(response) {
       "mutual_funds",
     ]);
 
-  const public =
+  const publicHolding =
     latestCategory([
       "retail and other",
       "retail_and_other",
@@ -790,11 +815,12 @@ function parseShareholding(response) {
     ]);
 
   /*
-    Compatibility rule:
-    If direct DII isn't available, use
-    Other DII + Mutual Funds.
+    If Upstox does not provide direct DII,
+    use Other DII + Mutual Funds for compatibility
+    with the current scoring model.
   */
-  let diiValue = dii.value;
+  let diiValue =
+    directDii.value;
 
   if (
     diiValue === null &&
@@ -814,10 +840,10 @@ function parseShareholding(response) {
   const periods = [
     promoter.period,
     fii.period,
-    dii.period,
+    directDii.period,
     otherDii.period,
     mutualFunds.period,
-    public.period,
+    publicHolding.period,
   ].filter(Boolean);
 
   periods.sort(
@@ -837,7 +863,7 @@ function parseShareholding(response) {
       diiValue,
 
     direct_dii:
-      dii.value,
+      directDii.value,
 
     other_dii:
       otherDii.value,
@@ -846,7 +872,7 @@ function parseShareholding(response) {
       mutualFunds.value,
 
     public:
-      public.value,
+      publicHolding.value,
 
     raw_period:
       periods[0] || null,
@@ -854,7 +880,7 @@ function parseShareholding(response) {
 }
 
 /* =========================================================
-   MERGE / COMPLETENESS
+   DATABASE MERGE
 ========================================================= */
 
 function preserveExisting(
@@ -940,11 +966,12 @@ export async function GET(request) {
       );
     }
 
-    if (
-      !/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(
+    const validIsin =
+      /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(
         isin
-      )
-    ) {
+      );
+
+    if (!validIsin) {
       return Response.json(
         {
           success: false,
@@ -957,9 +984,10 @@ export async function GET(request) {
       );
     }
 
-    /*
-      Find instrument.
-    */
+    /* -----------------------------------------------------
+       Load instrument
+    ----------------------------------------------------- */
+
     const {
       data: instrument,
       error: instrumentError,
@@ -990,9 +1018,10 @@ export async function GET(request) {
       );
     }
 
-    /*
-      Upstox requests.
-    */
+    /* -----------------------------------------------------
+       Upstox API calls
+    ----------------------------------------------------- */
+
     const profile =
       await upstoxGet(
         `/fundamentals/${isin}/profile`
@@ -1032,8 +1061,10 @@ export async function GET(request) {
 
       key_ratios: {
         ok: keyRatios.ok,
-        status: keyRatios.status,
-        error: keyRatios.error,
+        status:
+          keyRatios.status,
+        error:
+          keyRatios.error,
       },
 
       balance_sheet: {
@@ -1069,9 +1100,10 @@ export async function GET(request) {
       },
     };
 
-    /*
-      Parse actual Upstox response structures.
-    */
+    /* -----------------------------------------------------
+       Parse provider data
+    ----------------------------------------------------- */
+
     const ratios =
       parseKeyRatios(
         keyRatios.data
@@ -1102,9 +1134,10 @@ export async function GET(request) {
         profile.data
       );
 
-    /*
-      Existing DB fundamentals.
-    */
+    /* -----------------------------------------------------
+       Existing DB record
+    ----------------------------------------------------- */
+
     const {
       data: existing,
       error: existingError,
@@ -1123,9 +1156,13 @@ export async function GET(request) {
       );
     }
 
-    /*
-      Merge without erasing useful existing values.
-    */
+    /* -----------------------------------------------------
+       Merge
+
+       Critical rule:
+       Upstox null does NOT erase an existing good value.
+    ----------------------------------------------------- */
+
     const merged = {
       instrument_id:
         instrument.id,
@@ -1185,8 +1222,9 @@ export async function GET(request) {
         ),
 
       /*
-        Preserve existing valuation fields when
-        Upstox fundamentals doesn't supply them.
+        Keep existing valuation values because
+        these are not consistently returned by the
+        Upstox fundamentals endpoint.
       */
       market_cap:
         existing?.market_cap ??
@@ -1240,14 +1278,19 @@ export async function GET(request) {
         new Date().toISOString(),
     };
 
+    /* -----------------------------------------------------
+       Completeness
+    ----------------------------------------------------- */
+
     const completeness =
       calculateCompleteness(
         merged
       );
 
-    /*
-      Save.
-    */
+    /* -----------------------------------------------------
+       Save
+    ----------------------------------------------------- */
+
     const {
       data: saved,
       error: saveError,
@@ -1269,28 +1312,32 @@ export async function GET(request) {
       );
     }
 
-    /*
-      Financial period diagnostics.
+    /* -----------------------------------------------------
+       Financial period diagnostics
+    ----------------------------------------------------- */
 
-      Different statements can legitimately have
-      different latest periods.
+    const incomePeriod =
+      income.latest_period;
 
-      We therefore classify instead of forcing
-      alignment.
-    */
+    const balancePeriod =
+      balance.period;
+
+    const cashPeriod =
+      cash.period;
+
     const incomeDate =
       parsePeriodToDate(
-        income.latest_period
+        incomePeriod
       );
 
     const balanceDate =
       parsePeriodToDate(
-        balance.period
+        balancePeriod
       );
 
     const cashDate =
       parsePeriodToDate(
-        cash.period
+        cashPeriod
       );
 
     let periodStatus =
@@ -1320,6 +1367,10 @@ export async function GET(request) {
       }
     }
 
+    /* -----------------------------------------------------
+       Return
+    ----------------------------------------------------- */
+
     return Response.json({
       success: true,
 
@@ -1327,10 +1378,15 @@ export async function GET(request) {
         ENGINE_VERSION,
 
       instrument: {
-        id: instrument.id,
-        symbol: instrument.symbol,
+        id:
+          instrument.id,
+
+        symbol:
+          instrument.symbol,
+
         company_name:
           instrument.company_name,
+
         sector:
           instrument.sector,
       },
@@ -1348,11 +1404,21 @@ export async function GET(request) {
       },
 
       ratios: {
-        pe: ratios.pe,
-        pb: ratios.pb,
-        roe: ratios.roe,
-        roce: ratios.roce,
-        roa: ratios.roa,
+        pe:
+          ratios.pe,
+
+        pb:
+          ratios.pb,
+
+        roe:
+          ratios.roe,
+
+        roce:
+          ratios.roce,
+
+        roa:
+          ratios.roa,
+
         ev_ebitda:
           ratios.ev_ebitda,
       },
@@ -1425,13 +1491,13 @@ export async function GET(request) {
 
       financial_period_check: {
         income_statement:
-          income.latest_period,
+          incomePeriod,
 
         balance_sheet:
-          balance.period,
+          balancePeriod,
 
         cash_flow:
-          cash.period,
+          cashPeriod,
 
         income_date:
           incomeDate,
@@ -1465,7 +1531,8 @@ export async function GET(request) {
           "fundamentals",
 
         record_id:
-          saved?.id ?? null,
+          saved?.id ??
+          null,
       },
     });
   } catch (error) {
