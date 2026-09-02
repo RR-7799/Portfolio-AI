@@ -9,23 +9,23 @@ const supabase = createClient(
 );
 
 // ============================================================
-// PORTFOLIO AI — SAFE V4
+// PORTFOLIO AI — SAFE V4.1
 //
-// Major changes from V3:
+// V4.1 FIXES:
 //
-// 1. Missing metrics NEVER receive a perfect score.
-// 2. Missing valuation is treated as N/A, not ignored silently.
-// 3. Negative PE is NOT considered cheap.
-// 4. Partial data receives an explicit penalty.
-// 5. BUY requires sufficient confidence.
-// 6. High-risk stocks are prevented from receiving extreme scores.
-// 7. Sector-specific normalization retained.
-// 8. Existing DB schema retained.
-// 9. Mutual funds skipped.
-// 10. No BharatStock API calls.
+// 1. Missing valuation:
+//    - PE missing + PB missing = valuation N/A
+//    - Stock cannot be marked COMPLETE when valuation is missing
+//
+// 2. Negative / zero PE:
+//    - PE <= 0 is NOT treated as cheap
+//    - PB may still contribute
+//    - Overall valuation score capped at 60
+//
+// EVERYTHING ELSE IS KEPT FROM V4.
 // ============================================================
 
-const ENGINE_VERSION = "safe_v4";
+const ENGINE_VERSION = "safe_v4_1";
 
 // ============================================================
 // HELPERS
@@ -373,7 +373,6 @@ function cashFlowScore(
     return null;
   }
 
-  // If market cap unavailable, evaluate direction only.
   if (
     marketCap === null ||
     marketCap <= 0
@@ -469,11 +468,23 @@ function ownershipScore(
 }
 
 // ============================================================
-// VALUATION SCORE
+// V4.1 VALUATION SCORE
 //
-// IMPORTANT:
-// Negative PE is NOT cheap.
-// Missing PE/PB = N/A.
+// FIX #2:
+//
+// Negative / zero PE is NOT considered cheap.
+//
+// Examples:
+//
+// PE = 16, PB = 2
+// -> normal valuation
+//
+// PE = -518, PB = 0.98
+// -> PB contributes
+// -> valuation capped at 60
+//
+// PE missing + PB missing
+// -> valuation = null
 // ============================================================
 
 function valuationScore(
@@ -482,7 +493,10 @@ function valuationScore(
 ) {
   const scores = [];
 
+  // ----------------------------------------------------------
   // PE
+  // ----------------------------------------------------------
+
   if (
     pe !== null &&
     pe > 0
@@ -505,7 +519,10 @@ function valuationScore(
       scores.push(10);
   }
 
+  // ----------------------------------------------------------
   // PB
+  // ----------------------------------------------------------
+
   if (
     pb !== null &&
     pb > 0
@@ -526,7 +543,41 @@ function valuationScore(
       scores.push(15);
   }
 
-  return average(scores);
+  // ----------------------------------------------------------
+  // No usable valuation
+  // ----------------------------------------------------------
+
+  if (
+    scores.length === 0
+  ) {
+    return null;
+  }
+
+  let result =
+    average(scores);
+
+  // ----------------------------------------------------------
+  // NEGATIVE / ZERO PE FIX
+  //
+  // A company with negative earnings should NOT be allowed
+  // to receive an excellent valuation score merely because
+  // PB looks cheap.
+  // ----------------------------------------------------------
+
+  if (
+    pe !== null &&
+    pe <= 0
+  ) {
+    result =
+      Math.min(
+        result,
+        60
+      );
+  }
+
+  return round(
+    result
+  );
 }
 
 // ============================================================
@@ -545,7 +596,10 @@ function riskScore({
 }) {
   const scores = [];
 
+  // ----------------------------------------------------------
   // Debt
+  // ----------------------------------------------------------
+
   if (
     debtEquity !== null
   ) {
@@ -561,7 +615,10 @@ function riskScore({
       scores.push(25);
   }
 
+  // ----------------------------------------------------------
   // Profit deterioration
+  // ----------------------------------------------------------
+
   if (
     profitGrowth !== null
   ) {
@@ -577,7 +634,10 @@ function riskScore({
       scores.push(15);
   }
 
+  // ----------------------------------------------------------
   // ROE
+  // ----------------------------------------------------------
+
   if (
     roe !== null
   ) {
@@ -593,31 +653,54 @@ function riskScore({
       scores.push(25);
   }
 
-  // Valuation risk
+  // ----------------------------------------------------------
+  // PE risk
+  // ----------------------------------------------------------
+
   if (
     pe !== null
   ) {
-    if (pe <= 20 && pe > 0)
+    if (
+      pe <= 20 &&
+      pe > 0
+    )
       scores.push(90);
-    else if (pe <= 35 && pe > 0)
+
+    else if (
+      pe <= 35 &&
+      pe > 0
+    )
       scores.push(70);
-    else if (pe <= 50 && pe > 0)
+
+    else if (
+      pe <= 50 &&
+      pe > 0
+    )
       scores.push(50);
-    else if (pe > 50)
+
+    else if (
+      pe > 50
+    )
       scores.push(25);
+
     else
       scores.push(30);
   }
 
-  // Sector risk
+  // ----------------------------------------------------------
+  // Financial sector risk adjustment
+  // ----------------------------------------------------------
+
   if (
     sector === "BANK" ||
     sector === "FINANCIAL"
   ) {
-    // Financial companies receive a modest risk haircut
-    // until sector-specific metrics are available.
     scores.push(65);
   }
+
+  // ----------------------------------------------------------
+  // Unclassified sector
+  // ----------------------------------------------------------
 
   if (
     sector === "OTHER"
@@ -625,10 +708,9 @@ function riskScore({
     scores.push(55);
   }
 
-  const result =
-    average(scores);
-
-  return result;
+  return average(
+    scores
+  );
 }
 
 // ============================================================
@@ -901,7 +983,7 @@ function getWeights(
 }
 
 // ============================================================
-// COMPONENT CALCULATION
+// FINAL SCORE
 // ============================================================
 
 function calculateFinalScore({
@@ -978,14 +1060,6 @@ function calculateFinalScore({
     return null;
   }
 
-  // ----------------------------------------------------------
-  // IMPORTANT:
-  // Missing components are NOT allowed to inflate the score.
-  //
-  // Instead of simply renormalizing missing weights to 100,
-  // we apply a coverage penalty.
-  // ----------------------------------------------------------
-
   const rawScore =
     weightedTotal /
     usedWeight;
@@ -1002,7 +1076,9 @@ function calculateFinalScore({
     coveragePenalty;
 
   return clamp(
-    round(adjustedScore)
+    round(
+      adjustedScore
+    )
   );
 }
 
@@ -1086,29 +1162,17 @@ function getAction({
   risk,
   valuation,
 }) {
-  // ----------------------------------------------------------
-  // No score
-  // ----------------------------------------------------------
-
   if (
     score === null
   ) {
     return "WAIT";
   }
 
-  // ----------------------------------------------------------
-  // Very incomplete
-  // ----------------------------------------------------------
-
   if (
     completeness < 30
   ) {
     return "WAIT";
   }
-
-  // ----------------------------------------------------------
-  // Provisional data
-  // ----------------------------------------------------------
 
   if (
     completeness < 50 ||
@@ -1123,10 +1187,6 @@ function getAction({
     return "WAIT";
   }
 
-  // ----------------------------------------------------------
-  // High risk prevents aggressive BUY
-  // ----------------------------------------------------------
-
   if (
     risk !== null &&
     risk < 45
@@ -1140,10 +1200,7 @@ function getAction({
     return "REDUCE";
   }
 
-  // ----------------------------------------------------------
-  // BUY requires valuation
-  // ----------------------------------------------------------
-
+  // BUY still requires valuation.
   if (
     score >= 85 &&
     confidence >= 80 &&
@@ -1155,19 +1212,11 @@ function getAction({
     return "BUY";
   }
 
-  // ----------------------------------------------------------
-  // Strong score but insufficient valuation
-  // ----------------------------------------------------------
-
   if (
     score >= 80
   ) {
     return "WATCH";
   }
-
-  // ----------------------------------------------------------
-  // Good
-  // ----------------------------------------------------------
 
   if (
     score >= 70
@@ -1175,19 +1224,11 @@ function getAction({
     return "HOLD";
   }
 
-  // ----------------------------------------------------------
-  // Average
-  // ----------------------------------------------------------
-
   if (
     score >= 60
   ) {
     return "WATCH";
   }
-
-  // ----------------------------------------------------------
-  // Weak
-  // ----------------------------------------------------------
 
   if (
     score >= 50
@@ -1199,7 +1240,7 @@ function getAction({
 }
 
 // ============================================================
-// DATA REASONS
+// NOTES
 // ============================================================
 
 function buildNotes({
@@ -1216,7 +1257,7 @@ function buildNotes({
   const notes = [];
 
   if (
-    completeness < 80
+    completeness < 90
   ) {
     notes.push(
       `Fundamental data completeness is ${completeness}%.`
@@ -1244,7 +1285,7 @@ function buildNotes({
     pe <= 0
   ) {
     notes.push(
-      "PE is non-positive; valuation is not treated as cheap on PE."
+      "PE is non-positive; it is not treated as cheap."
     );
   }
 
@@ -1296,7 +1337,7 @@ function buildNotes({
 }
 
 // ============================================================
-// MAIN
+// MAIN API
 // ============================================================
 
 export async function GET() {
@@ -1412,39 +1453,7 @@ export async function GET() {
       );
 
     // ========================================================
-    // 4. EXISTING AI SCORES
-    // ========================================================
-
-    const {
-      data: existingScores,
-      error: existingScoresError,
-    } = await supabase
-      .from("ai_scores")
-      .select(
-        "instrument_id"
-      )
-      .in(
-        "instrument_id",
-        instrumentIds
-      );
-
-    if (existingScoresError) {
-      throw new Error(
-        `AI scores query failed: ${existingScoresError.message}`
-      );
-    }
-
-    const existingScoreIds =
-      new Set(
-        (existingScores || [])
-          .map(
-            (item) =>
-              item.instrument_id
-          )
-      );
-
-    // ========================================================
-    // 5. PROCESS
+    // 4. PROCESS
     // ========================================================
 
     const results = [];
@@ -1478,7 +1487,7 @@ export async function GET() {
           );
 
         // ----------------------------------------------------
-        // Mutual funds
+        // FUNDS
         // ----------------------------------------------------
 
         if (
@@ -1514,7 +1523,7 @@ export async function GET() {
           ) || {};
 
         // ----------------------------------------------------
-        // Fundamentals
+        // INPUTS
         // ----------------------------------------------------
 
         const salesGrowth =
@@ -1632,7 +1641,7 @@ export async function GET() {
           );
 
         // ----------------------------------------------------
-        // Component scores
+        // COMPONENTS
         // ----------------------------------------------------
 
         const growth =
@@ -1682,10 +1691,10 @@ export async function GET() {
           });
 
         // ----------------------------------------------------
-        // Completeness
+        // COMPLETENESS
         // ----------------------------------------------------
 
-        const completeness =
+        let completeness =
           calculateCompleteness({
             sector,
             salesGrowth,
@@ -1746,6 +1755,10 @@ export async function GET() {
             risk_level:
               "HIGH",
 
+            completeness,
+
+            confidence,
+
             score_breakdown: {
               engine:
                 ENGINE_VERSION,
@@ -1776,7 +1789,7 @@ export async function GET() {
         }
 
         // ----------------------------------------------------
-        // Weights
+        // WEIGHTS
         // ----------------------------------------------------
 
         const weights =
@@ -1785,7 +1798,7 @@ export async function GET() {
           );
 
         // ----------------------------------------------------
-        // Final score
+        // FINAL SCORE
         // ----------------------------------------------------
 
         let totalScore =
@@ -1808,9 +1821,7 @@ export async function GET() {
           });
 
         // ----------------------------------------------------
-        // Confidence adjustment
-        //
-        // V4 deliberately applies an additional ceiling.
+        // CONFIDENCE CEILING
         // ----------------------------------------------------
 
         if (
@@ -1858,9 +1869,7 @@ export async function GET() {
         }
 
         // ----------------------------------------------------
-        // Risk adjustment
-        //
-        // High risk should materially constrain score.
+        // RISK CEILING
         // ----------------------------------------------------
 
         if (
@@ -1907,27 +1916,66 @@ export async function GET() {
                 )
               );
 
-        // ----------------------------------------------------
-        // Status
-        // ----------------------------------------------------
+        // ====================================================
+        // V4.1 FIX #1
+        //
+        // Missing PE + PB means valuation is unavailable.
+        // Therefore the company cannot be COMPLETE.
+        //
+        // We intentionally DO NOT change the numeric
+        // completeness percentage itself. We change the
+        // status classification.
+        // ====================================================
 
-        let dataStatus =
-          "COMPLETE";
+        let dataStatus;
 
         if (
-          completeness < 50
+          completeness >= 90
         ) {
           dataStatus =
-            "PROVISIONAL";
-
-          provisional++;
+            "COMPLETE";
         }
 
         else if (
-          completeness < 80
+          completeness >= 70
         ) {
           dataStatus =
             "PARTIAL";
+        }
+
+        else if (
+          completeness >= 50
+        ) {
+          dataStatus =
+            "LIMITED";
+        }
+
+        else {
+          dataStatus =
+            "PROVISIONAL";
+        }
+
+        // ----------------------------------------------------
+        // Missing valuation overrides COMPLETE.
+        // ----------------------------------------------------
+
+        if (
+          valuation === null &&
+          dataStatus === "COMPLETE"
+        ) {
+          dataStatus =
+            "PARTIAL";
+        }
+
+        // ----------------------------------------------------
+        // Counters
+        // ----------------------------------------------------
+
+        if (
+          dataStatus ===
+          "PROVISIONAL"
+        ) {
+          provisional++;
         }
 
         else {
@@ -1935,7 +1983,7 @@ export async function GET() {
         }
 
         // ----------------------------------------------------
-        // Risk
+        // RISK
         // ----------------------------------------------------
 
         const riskLevel =
@@ -1945,7 +1993,7 @@ export async function GET() {
           );
 
         // ----------------------------------------------------
-        // Action
+        // ACTION
         // ----------------------------------------------------
 
         const action =
@@ -1963,7 +2011,7 @@ export async function GET() {
           });
 
         // ----------------------------------------------------
-        // Rating
+        // RATING
         // ----------------------------------------------------
 
         const rating =
@@ -1973,7 +2021,7 @@ export async function GET() {
           );
 
         // ----------------------------------------------------
-        // Notes
+        // NOTES
         // ----------------------------------------------------
 
         const notes =
@@ -1998,13 +2046,13 @@ export async function GET() {
           });
 
         // ----------------------------------------------------
-        // Diagnostics
+        // DIAGNOSTICS
         // ----------------------------------------------------
 
         const diagnostics = [];
 
         if (
-          completeness < 80
+          completeness < 90
         ) {
           diagnostics.push(
             "PARTIAL_DATA"
@@ -2026,6 +2074,10 @@ export async function GET() {
             "VALUATION_MISSING"
           );
         }
+
+        // ----------------------------------------------------
+        // V4.1 NEGATIVE PE DIAGNOSTIC
+        // ----------------------------------------------------
 
         if (
           pe !== null &&
@@ -2075,7 +2127,19 @@ export async function GET() {
         }
 
         // ----------------------------------------------------
-        // Score breakdown
+        // V4.1 SPECIFIC DIAGNOSTIC
+        // ----------------------------------------------------
+
+        if (
+          valuation === null
+        ) {
+          diagnostics.push(
+            "VALUATION_REQUIRED_FOR_COMPLETE"
+          );
+        }
+
+        // ----------------------------------------------------
+        // SCORE BREAKDOWN
         // ----------------------------------------------------
 
         const scoreBreakdown = {
@@ -2131,6 +2195,13 @@ export async function GET() {
 
             valuation_score:
               valuation,
+
+            negative_pe:
+              pe !== null &&
+              pe <= 0,
+
+            valuation_available:
+              valuation !== null,
           },
 
           weights,
@@ -2168,17 +2239,20 @@ export async function GET() {
           notes,
 
           rules: {
-            missing_metrics:
-              "Missing metrics are never awarded a perfect score.",
-
             missing_valuation:
-              "Missing valuation is N/A and reduces score coverage.",
+              "If PE and PB are both unavailable, valuation is N/A and the stock cannot be COMPLETE.",
 
             negative_pe:
-              "Negative or zero PE is not treated as cheap.",
+              "PE <= 0 is not treated as cheap. If PB is available, valuation may contribute but is capped at 60.",
 
-            partial_data:
-              "Partial data is explicitly penalized.",
+            complete_threshold:
+              "COMPLETE requires at least 90% data completeness.",
+
+            partial_threshold:
+              "70-89% data completeness is PARTIAL.",
+
+            limited_threshold:
+              "50-69% data completeness is LIMITED.",
 
             buy_rule:
               "BUY requires score >=85, confidence >=80, completeness >=80, valuation available and acceptable risk.",
@@ -2192,7 +2266,7 @@ export async function GET() {
         };
 
         // ----------------------------------------------------
-        // UPSERT AI SCORE
+        // UPSERT
         // ----------------------------------------------------
 
         const payload = {
@@ -2430,7 +2504,7 @@ export async function GET() {
       );
 
     // ========================================================
-    // FINAL RESPONSE
+    // RESPONSE
     // ========================================================
 
     return NextResponse.json({
@@ -2487,7 +2561,7 @@ export async function GET() {
 
   } catch (error) {
     console.error(
-      "Portfolio AI V4 error:",
+      "Portfolio AI V4.1 error:",
       error
     );
 
