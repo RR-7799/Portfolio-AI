@@ -77,7 +77,15 @@ export default function HoldingIntelligencePage() {
     [data, selected]
   );
 
-  const scoreFactors = holding?.score_breakdown || holding?.components || {};
+  const scoreFactors = holding ? {
+    growth_score: holding.growth_score,
+    profitability_score: holding.profitability_score,
+    debt_score: holding.debt_score,
+    ownership_score: holding.ownership_score,
+    cashflow_score: holding.cashflow_score,
+    valuation_score: holding.valuation_score,
+    risk_score: holding.risk_score,
+  } : {};
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "32px 20px 80px" }}>
