@@ -585,3 +585,120 @@ export async function POST(request) {
     );
   }
 }
+export async function GET() {
+  try {
+    const { data: instruments, error } = await supabase
+      .from("instruments")
+      .select("id, company_name, symbol, sector")
+      .order("company_name", { ascending: true });
+
+    if (error) {
+      throw new Error(`Instruments query failed: ${error.message}`);
+    }
+
+    if (!instruments || instruments.length === 0) {
+      return NextResponse.json({
+        success: true,
+        engine_version: "sector_fix_v1",
+        message: "No instruments found.",
+        processed: 0,
+        updated: 0,
+        unchanged: 0,
+        errors: 0,
+      });
+    }
+
+    const results = [];
+    let updated = 0;
+    let unchanged = 0;
+    let errors = 0;
+
+    for (const instrument of instruments) {
+      try {
+        const classification = classifyCompany(
+          instrument.company_name,
+          instrument.sector
+        );
+
+        const oldSector = instrument.sector;
+        const newSector = classification.sector;
+
+        const changed =
+          normalizeText(oldSector) !== normalizeText(newSector);
+
+        if (changed) {
+          const { error: updateError } = await supabase
+            .from("instruments")
+            .update({
+              sector: newSector,
+            })
+            .eq("id", instrument.id);
+
+          if (updateError) {
+            throw new Error(updateError.message);
+          }
+
+          updated++;
+        } else {
+          unchanged++;
+        }
+
+        results.push({
+          symbol: instrument.symbol,
+          company_name: instrument.company_name,
+          old_sector: oldSector,
+          new_sector: newSector,
+          method: classification.method,
+          changed,
+        });
+      } catch (instrumentError) {
+        errors++;
+
+        results.push({
+          symbol: instrument.symbol,
+          company_name: instrument.company_name,
+          old_sector: instrument.sector,
+          new_sector: null,
+          method: "ERROR",
+          changed: false,
+          error: instrumentError.message,
+        });
+      }
+    }
+
+    const sectorCounts = {};
+
+    for (const item of results) {
+      if (!item.new_sector) continue;
+
+      sectorCounts[item.new_sector] =
+        (sectorCounts[item.new_sector] || 0) + 1;
+    }
+
+    return NextResponse.json({
+      success: true,
+      engine_version: "sector_fix_v1",
+      processed: instruments.length,
+      updated,
+      unchanged,
+      errors,
+      sector_counts: sectorCounts,
+      corrections: results.filter((x) => x.changed),
+      unclassified: results.filter(
+        (x) =>
+          x.new_sector === SECTORS.OTHER &&
+          x.method === "UNCLASSIFIED"
+      ),
+    });
+  } catch (error) {
+    console.error("Sector classification GET failed:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message || "Unknown error",
+      },
+      { status: 500 }
+    );
+  }
+}
