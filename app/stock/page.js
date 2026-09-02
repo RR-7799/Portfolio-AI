@@ -29,6 +29,7 @@ export default function StockPage() {
   const b = ai_score?.breakdown || {};
   const components = b.components || {};
   const freshness = b.freshness || {};
+  const instrumentId = instrument?.id;
 
   return (
     <main className="stockShell">
@@ -37,6 +38,7 @@ export default function StockPage() {
         <div><div className="eyebrow">{instrument.sector || "OTHER"}</div><h1>{instrument.company_name}</h1><p>{instrument.symbol}</p></div>
         <div className="heroScore"><span className="label">AI SCORE</span><strong>{ai_score?.total_score ?? "—"}</strong><div><Badge tone={toneForAction(ai_score?.action)}>{ai_score?.action || "—"}</Badge> <Badge>{ai_score?.rating || "—"}</Badge></div></div>
       </section>
+      <section className="card marketLinkCard"><div><div className="eyebrow">MARKET INTELLIGENCE</div><h2>See live price, trend, momentum and trade levels</h2><p>Upstox market data with moving averages, RSI, MACD, volatility, 52-week levels and quantitative reference levels.</p></div><Link href={`/market?instrument_id=${encodeURIComponent(instrumentId || "")}`}><button className="primaryAction">Open Market View →</button></Link></section>
       <section className="grid three">
         <div className="card"><span className="label">RISK</span><h2>{ai_score?.risk_level || "—"}</h2><p>Model risk assessment</p></div>
         <div className="card"><span className="label">CONFIDENCE</span><h2>{freshness.effective_confidence ?? "—"}%</h2><p>After freshness adjustment</p></div>
