@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "decision_engine_v2_0";
+const ENGINE_VERSION = "decision_engine_v2_1";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 function userClient(token) { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } }); }
@@ -39,7 +39,6 @@ function decisionV2(input){
   else if (m==="BEAR" && s<72) { action="HOLD"; reason="Thesis is not broken, but the market regime argues against aggressive adding"; confidence=76; }
   else { action="WATCH"; reason="Mixed fundamentals, valuation, risk and opportunity signals need confirmation"; confidence=70; }
 
-  // Portfolio-specific trim rule: concentration is a position-management issue, not a company-quality verdict.
   if(action==="HOLD" && overweight && (valuationWeak || highRisk)) { action="REDUCE"; reason="Investment thesis is intact, but portfolio concentration/risk warrants trimming"; confidence=84; }
   if(action==="ACCUMULATE" && overweight) { action="HOLD"; reason="Strong thesis, but position is already large enough to avoid adding concentration"; confidence=85; }
 
@@ -68,4 +67,32 @@ async function buildForUser(client,userId){
   return{user_id:userId,market_regime:regime,portfolio_value:total,decisions:results};
 }
 
-export async function GET(request){try{const auth=request.headers.get("authorization")||"",token=auth.replace(/^Bearer\s+/i,"").trim();if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});const client=userClient(token),{data:userResult,error:userError}=await client.auth.getUser(token);if(userError||!userResult?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});const portfolio=await buildForUser(client,userResult.user.id),counts={};for(const x of portfolio.decisions)counts[x.decision]=(counts[x.decision]||0)+1;return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts:counts});}catch(error){console.error("Decision engine V2 error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});}}
+async function persistFinalActions(decisions) {
+  let updated = 0;
+  for (const item of decisions || []) {
+    if (!item.instrument_id || !item.decision) continue;
+    const { error } = await admin
+      .from("ai_scores")
+      .update({ action: item.decision, updated_at: new Date().toISOString() })
+      .eq("instrument_id", item.instrument_id);
+    if (error) throw new Error(`Decision persistence failed for ${item.company_name || item.instrument_id}: ${error.message}`);
+    updated++;
+  }
+  return updated;
+}
+
+export async function GET(request){
+  try{
+    const auth=request.headers.get("authorization")||"",token=auth.replace(/^Bearer\s+/i,"").trim();
+    if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});
+    const client=userClient(token),{data:userResult,error:userError}=await client.auth.getUser(token);
+    if(userError||!userResult?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});
+    const portfolio=await buildForUser(client,userResult.user.id);
+    const persisted=await persistFinalActions(portfolio.decisions);
+    const counts={};for(const x of portfolio.decisions)counts[x.decision]=(counts[x.decision]||0)+1;
+    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts:counts,persisted_actions:persisted});
+  }catch(error){
+    console.error("Decision engine V2 error:",error);
+    return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});
+  }
+}
