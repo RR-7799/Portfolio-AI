@@ -49,10 +49,19 @@ export default function LiveStockTable() {
 
     if (!companyHeader) return false;
 
-    // Remove Symbol completely: the requested table is
-    // Company | LTP | Broker | Qty | Invested | Value | P/L | AI
+    // Capture the hidden ISIN on the Company cell before removing Symbol.
     if (symbolHeader) {
       const symbolIndex = headers.indexOf(symbolHeader);
+      table.querySelectorAll("tbody tr").forEach((row) => {
+        const companyCell = row.children[0];
+        const symbolCell = row.children[symbolIndex];
+        if (companyCell && symbolCell) {
+          companyCell.dataset.instrumentSymbol = normalise(
+            symbolCell.textContent
+          );
+        }
+      });
+
       symbolHeader.remove();
       table.querySelectorAll("tbody tr").forEach((row) => {
         row.children[symbolIndex]?.remove();
@@ -63,7 +72,6 @@ export default function LiveStockTable() {
     const refreshedCompanyHeader = refreshedHeaders.find(
       (cell) => normalise(cell.textContent) === "COMPANY"
     );
-
     if (!refreshedCompanyHeader) return false;
 
     let ltpHeader = headRow.querySelector('[data-live-ltp-header="true"]');
@@ -77,19 +85,14 @@ export default function LiveStockTable() {
     const companyIndex = Array.from(headRow.children).indexOf(
       refreshedCompanyHeader
     );
-    const ltpIndex = companyIndex + 1;
 
     table.querySelectorAll("tbody tr").forEach((row) => {
       const cells = Array.from(row.children);
       const companyCell = cells[companyIndex];
       if (!companyCell) return;
 
-      // The quote API returns the instrument symbol (ISIN), so keep it
-      // hidden in a data attribute instead of displaying a Symbol column.
-      const symbol = normalise(
-        companyCell.getAttribute("data-instrument-symbol") ||
-          companyCell.dataset.instrumentSymbol
-      );
+      const symbol = normalise(companyCell.dataset.instrumentSymbol);
+      const quote = symbol ? quotes.get(symbol) : null;
 
       let ltpCell = row.querySelector('[data-live-ltp-cell="true"]');
       if (!ltpCell) {
@@ -99,15 +102,11 @@ export default function LiveStockTable() {
         companyCell.insertAdjacentElement("afterend", ltpCell);
       }
 
-      const quote = symbol ? quotes.get(symbol) : null;
       ltpCell.innerHTML = quote?.lastPrice == null
         ? '<span style="opacity:.55">—</span>'
         : `<strong>${money(quote.lastPrice)}</strong>`;
 
-      // Keep the inserted cell immediately after Company even if React
-      // re-renders the table.
-      const currentIndex = Array.from(row.children).indexOf(ltpCell);
-      if (currentIndex !== ltpIndex) {
+      if (ltpCell.previousElementSibling !== companyCell) {
         companyCell.insertAdjacentElement("afterend", ltpCell);
       }
     });
@@ -139,7 +138,6 @@ export default function LiveStockTable() {
       Object.values(body.quotes || {}).forEach((quote) => {
         const isin = normalise(quote?.symbol);
         const lastPrice = Number(quote?.last_price);
-
         if (!isin) return;
 
         nextQuotes.set(isin, {
@@ -197,7 +195,5 @@ export default function LiveStockTable() {
     };
   }, [applyToTable]);
 
-  // React dashboard remains the source of truth for holdings.
-  // This component only decorates the existing table with live LTP.
   return null;
 }
