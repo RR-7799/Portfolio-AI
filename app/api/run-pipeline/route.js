@@ -6,11 +6,11 @@ import { GET as runSnapshot } from "../portfolio-snapshot/route";
 import { GET as runAlerts } from "../portfolio-alerts/route";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "pipeline_v1_3";
+const ENGINE_VERSION = "pipeline_v1_4";
 const BATCH_SIZE = 10;
 function isAuthorized(request){const s=process.env.PIPELINE_SECRET;if(!s)return false;const h=request.headers.get("x-pipeline-secret");const a=request.headers.get("authorization");return h===s||(a?.startsWith("Bearer ")&&a.slice(7)===s);}
 async function parseJsonResponse(r){try{return await r.json();}catch{return {success:false,error:"Pipeline stage returned a non-JSON response",status:r.status};}}
-async function runStage(label,handler,url,headers={}){const t=Date.now();const r=await handler(new Request(url,{method:"GET",headers}));const payload=await parseJsonResponse(r);return {stage:label,http_status:r.status,duration_ms:Date.now()-t,success:r.status>=200&&r.status<300&&payload?.success!==false,data:payload};}
+async function runStage(label,handler,url,headers={}){const t=Date.now();try{const r=await handler(new Request(url,{method:"GET",headers}));const payload=await parseJsonResponse(r);return {stage:label,http_status:r.status,duration_ms:Date.now()-t,success:r.status>=200&&r.status<300&&payload?.success!==false,data:payload};}catch(error){return {stage:label,http_status:500,duration_ms:Date.now()-t,success:false,data:{success:false,error:error?.message||`${label} threw an exception.`}};}}
 export async function GET(request){
  if(!isAuthorized(request))return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:process.env.PIPELINE_SECRET?"Unauthorized":"PIPELINE_SECRET is not configured"},{status:401});
  const startedAt=Date.now();const {searchParams}=new URL(request.url);const requested=String(searchParams.get("stage")||"all").toLowerCase();const stage=["sync","freshness","score","snapshot","alerts","all"].includes(requested)?requested:"all";const origin=new URL(request.url).origin;const stages=[];const headers={"x-pipeline-secret":process.env.PIPELINE_SECRET||""};
@@ -21,8 +21,8 @@ export async function GET(request){
   if(stage==="snapshot"||stage==="all"){const r=await runStage("portfolio_snapshot",runSnapshot,`${origin}/api/portfolio-snapshot`,headers);stages.push(r);if(!r.success)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,failed_stage:r.stage,elapsed_ms:Date.now()-startedAt,stages},{status:502});}
   if(stage==="alerts"||stage==="all"){
    const r=await runStage("portfolio_alerts",runAlerts,`${origin}/api/portfolio-alerts`,headers);stages.push(r);
-   // Alerts are an auxiliary notification layer. A failure here must not block
-   // scoring, snapshots, or the user-scoped Decision Engine.
+   // Alerts are auxiliary. Whether the route returns an error or throws, never block
+   // scoring, snapshots, or the user-scoped Decision Engine because notifications failed.
   }
   const syncStages=stages.filter(x=>x.stage.startsWith("upstox_sync_"));const syncResults=syncStages.flatMap(x=>x.data?.results||[]);const finalScore=stages.find(x=>x.stage==="safe_v4_2_score");const freshness=stages.find(x=>x.stage==="freshness_audit");const snapshot=stages.find(x=>x.stage==="portfolio_snapshot");const alerts=stages.find(x=>x.stage==="portfolio_alerts");
   const alertsWarning=alerts&&!alerts.success?(alerts.data?.error||alerts.data?.message||`Alert stage failed with HTTP ${alerts.http_status}.`):alerts?.data?.warning||null;
