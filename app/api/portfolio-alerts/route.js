@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_alerts_v1_7";
+const ENGINE_VERSION = "portfolio_alerts_v1_8";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 function userClient(token){return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});}
@@ -28,13 +28,27 @@ async function generateForAllUsers(){
   const holdings=(h.data||[]).filter(x=>x.user_id===userId);const total=holdings.reduce((a,x)=>a+n(x.current_value),0);const sectorMap=new Map();
   for(const x of holdings){
    const meta=im.get(x.instrument_id)||{};const rows=history.get(x.instrument_id)||[];const sc=rows[0]||{};const prior=rows[1]||null;const name=meta.company_name||meta.symbol||"Holding";const aid=im.has(x.instrument_id)?x.instrument_id:null;
-   const action=up(sc.action),priorAction=up(prior?.action);const risk=up(sc.risk_level),priorRisk=up(prior?.risk_level);const pnl=n(x.pnl_percentage),priorPnl=n(prior?.pnl_percentage);
+   const action=up(sc.action),priorAction=up(prior?.action),risk=up(sc.risk_level),priorRisk=up(prior?.risk_level),pnl=n(x.pnl_percentage),priorPnl=n(prior?.pnl_percentage);
    const weight=total>0?n(x.current_value)/total*100:0;const sector=meta.sector||"OTHER";sectorMap.set(sector,(sectorMap.get(sector)||0)+n(x.current_value));
    if(prior){
     const scoreDelta=n(sc.total_score)-n(prior.total_score);
     if(scoreDelta<=-10)alerts.push({user_id:userId,instrument_id:aid,severity:"CRITICAL",type:"SCORE_DROP",title:`${name} AI score fell sharply`,message:`AI score changed from ${n(prior.total_score).toFixed(1)} to ${n(sc.total_score).toFixed(1)} (${scoreDelta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_DROP:${x.instrument_id}:${Math.floor(n(sc.total_score)/5)}`});
     else if(scoreDelta<=-5)alerts.push({user_id:userId,instrument_id:aid,severity:"WARNING",type:"SCORE_DROP",title:`${name} AI score declined`,message:`AI score changed from ${n(prior.total_score).toFixed(1)} to ${n(sc.total_score).toFixed(1)} (${scoreDelta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_DROP:${x.instrument_id}:${Math.floor(n(sc.total_score)/5)}`});
-    if(action!==priorAction&&action){const urgent=["EXIT","REDUCE"].includes(action);alerts.push({user_id:userId,instrument_id:aid,severity:action==="EXIT"?"CRITICAL":urgent?"WARNING":"INFO",type:"ACTION_CHANGE",title:`${name} action changed`,message:`AI action moved from ${priorAction||"UNKNOWN"} to ${action}.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${action}`});}
+
+    // Only alert on decision changes that materially change the user's action.
+    // HOLD/WATCH churn is routine and should not create notification noise.
+    // Escalations to REDUCE/EXIT remain actionable; improvements to BUY/ACCUMULATE
+    // are surfaced only when supported by a meaningful score improvement.
+    if(action!==priorAction&&action){
+      const escalation=["EXIT","REDUCE"].includes(action);
+      const improvement=["BUY","ACCUMULATE"].includes(action);
+      if(escalation){
+        alerts.push({user_id:userId,instrument_id:aid,severity:action==="EXIT"?"CRITICAL":"WARNING",type:"ACTION_CHANGE",title:`${name} action changed`,message:`AI action moved from ${priorAction||"UNKNOWN"} to ${action}.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${action}`});
+      }else if(improvement&&scoreDelta>=5){
+        alerts.push({user_id:userId,instrument_id:aid,severity:"INFO",type:"ACTION_CHANGE",title:`${name} action improved`,message:`AI action moved from ${priorAction||"UNKNOWN"} to ${action} with AI score improving by ${scoreDelta.toFixed(1)} points.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${action}`});
+      }
+    }
+
     if(risk!==priorRisk&&risk){const worsened=["HIGH","CRITICAL"].includes(risk)&&!["HIGH","CRITICAL"].includes(priorRisk);const improved=["LOW","MODERATE"].includes(risk)&&["HIGH","CRITICAL"].includes(priorRisk);if(worsened)alerts.push({user_id:userId,instrument_id:aid,severity:risk==="CRITICAL"?"CRITICAL":"WARNING",type:"RISK_CHANGE",title:`${name} risk worsened`,message:`AI risk moved from ${priorRisk||"UNKNOWN"} to ${risk}.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${risk}`});else if(improved)alerts.push({user_id:userId,instrument_id:aid,severity:"INFO",type:"RISK_IMPROVEMENT",title:`${name} risk improved`,message:`AI risk moved from ${priorRisk} to ${risk}.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${risk}`});}
     if(pnl<=-15&&priorPnl>-15)alerts.push({user_id:userId,instrument_id:aid,severity:"WARNING",type:"DRAWDOWN",title:`${name} entered drawdown`,message:`Unrealized loss crossed -15% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:15`});
     if(pnl<=-25&&priorPnl>-25)alerts.push({user_id:userId,instrument_id:aid,severity:"CRITICAL",type:"DRAWDOWN",title:`${name} entered severe drawdown`,message:`Unrealized loss crossed -25% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:25`});
