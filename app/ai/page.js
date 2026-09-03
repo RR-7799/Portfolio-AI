@@ -2,22 +2,82 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-const supabase=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-const score=(v)=>v==null?"—":Number(v).toFixed(1);
-const badge=(v)=>{const x=String(v||"").toUpperCase();if(["BUY","ACCUMULATE","EXCELLENT","STRONG","FRESH","LOW"].includes(x))return {background:"#e8f7ef",color:"#137a46"};if(["HOLD","GOOD","ACCEPTABLE","MODERATE","AVERAGE","NEUTRAL"].includes(x))return {background:"#eef3ff",color:"#3159a6"};if(["WATCH","WEAK","AGING","STALE"].includes(x))return {background:"#fff5df",color:"#9a6500"};return {background:"#fff0f0",color:"#b33a3a"};};
-function Badge({children}){return <span style={{...badge(children),display:"inline-block",borderRadius:999,padding:"5px 9px",fontSize:11,fontWeight:800}}>{children}</span>}
-function ScoreCard({label,value,grade}){return <div className="card" style={{margin:0}}><span className="label">{label}</span><h2 style={{margin:"6px 0 2px"}}>{score(value)}<small style={{fontSize:13,fontWeight:500}}>/100</small></h2>{grade&&<Badge>{grade}</Badge>}</div>}
-export default function AIPage(){
- const [session,setSession]=useState(null),[rows,setRows]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(""),[selected,setSelected]=useState(null);
- useEffect(()=>{let mounted=true;supabase.auth.getSession().then(({data})=>{if(!mounted)return;setSession(data.session);if(data.session)load(data.session.user.id);else setLoading(false);});const {data:l}=supabase.auth.onAuthStateChange((_e,s)=>{if(!mounted)return;setSession(s);if(s)load(s.user.id);});return()=>{mounted=false;l.subscription.unsubscribe();};},[]);
- async function load(userId){setLoading(true);setError("");try{const {data:h,error:he}=await supabase.from("holdings").select("instrument_id").eq("user_id",userId);if(he)throw new Error(he.message);const ids=[...new Set((h||[]).map(x=>x.instrument_id).filter(Boolean))];if(!ids.length){setRows([]);return;}const [{data:i,error:ie},{data:s,error:se}]=await Promise.all([supabase.from("instruments").select("id,symbol,company_name,sector").in("id",ids),supabase.from("ai_scores").select("instrument_id,long_term_score,short_term_score,risk_score,valuation_score,final_ai_score,total_score,confidence,data_completeness,freshness_status,score_version,action,rating,risk_level,score_breakdown,updated_at").in("instrument_id",ids)]);if(ie)throw new Error(ie.message);if(se)throw new Error(se.message);const im=new Map((i||[]).map(x=>[x.id,x]));const sm=new Map((s||[]).map(x=>[x.instrument_id,x]));const merged=ids.map(id=>{const a=sm.get(id)||{},m=im.get(id)||{};return {instrument_id:id,symbol:m.symbol||"—",company_name:m.company_name||"Unknown Stock",sector:m.sector||"OTHER",long_term_score:a.long_term_score??a.total_score??null,long_term_grade:a.score_breakdown?.long_term?.grade||null,short_term_score:a.short_term_score??null,short_term_grade:a.score_breakdown?.short_term?.grade||null,risk_score:a.risk_score??null,valuation_score:a.valuation_score??null,final_ai_score:a.final_ai_score??a.total_score??null,confidence:a.confidence??null,data_completeness:a.data_completeness??null,freshness_status:a.freshness_status||a.score_breakdown?.freshness?.status||"MISSING",action:a.action||"—",rating:a.rating||"—",risk_level:a.risk_level||"—",score_version:a.score_version||"legacy",breakdown:a.score_breakdown||{},updated_at:a.updated_at||null};});setRows(merged.sort((a,b)=>(b.final_ai_score??-1)-(a.final_ai_score??-1)));}catch(e){setError(e.message||"Unable to load AI scores.");}finally{setLoading(false);}}
- const average=useMemo(()=>{const a=rows.map(x=>x.final_ai_score).filter(x=>x!=null);return a.length?a.reduce((s,x)=>s+Number(x),0)/a.length:null;},[rows]);
- if(!session)return <main className="shell"><section className="card"><h1>Sign in required</h1><a href="/">Go to Dashboard</a></section></main>;
- return <main className="shell"><header className="topbar"><div><div className="eyebrow">PORTFOLIO AI / INTELLIGENCE</div><h1>AI Investment View</h1><p>Separate business quality from current market opportunity.</p></div><div style={{display:"flex",gap:8}}><a href="/" style={{textDecoration:"none"}}><button>Portfolio</button></a><button onClick={()=>supabase.auth.signOut()}>Sign out</button></div></header>
- {error&&<div className="error">{error}</div>}{loading&&<div className="card">Loading AI intelligence…</div>}
- {!loading&&<><section className="grid" style={{gridTemplateColumns:"repeat(5,minmax(0,1fr))"}}><ScoreCard label="AVERAGE LONG-TERM" value={rows.length?rows.reduce((s,x)=>s+(x.long_term_score??0),0)/rows.filter(x=>x.long_term_score!=null).length:null}/><ScoreCard label="AVERAGE SHORT-TERM" value={rows.length?rows.reduce((s,x)=>s+(x.short_term_score??0),0)/rows.filter(x=>x.short_term_score!=null).length:null}/><ScoreCard label="AVERAGE RISK" value={rows.length?rows.reduce((s,x)=>s+(x.risk_score??0),0)/rows.filter(x=>x.risk_score!=null).length:null}/><ScoreCard label="AVERAGE VALUATION" value={rows.length?rows.reduce((s,x)=>s+(x.valuation_score??0),0)/rows.filter(x=>x.valuation_score!=null).length:null}/><ScoreCard label="AVERAGE FINAL" value={average}/></section>
- <section className="card"><div className="eyebrow">HOW TO READ THIS</div><p><strong>Long-term</strong> answers “Is this a strong business for 3–5+ years?” <strong>Short-term</strong> answers “Is this attractive now?” Risk and valuation remain independent. Final AI Score is a transparent combination, not the portfolio decision by itself.</p></section>
- <section className="card"><div style={{overflowX:"auto"}}><table><thead><tr><th>Company</th><th>Long-term</th><th>Short-term</th><th>Risk</th><th>Valuation</th><th>Final</th><th>Confidence</th><th>Freshness</th><th>Decision</th></tr></thead><tbody>{rows.map(r=><tr key={r.instrument_id} onClick={()=>setSelected(r)} style={{cursor:"pointer"}}><td><strong>{r.company_name}</strong><small>{r.symbol} · {r.sector}</small></td><td><strong>{score(r.long_term_score)}</strong><small>{r.long_term_grade||"—"}</small></td><td><strong>{score(r.short_term_score)}</strong><small>{r.short_term_grade||"—"}</small></td><td>{score(r.risk_score)}</td><td>{score(r.valuation_score)}</td><td><strong>{score(r.final_ai_score)}</strong><small>{r.rating}</small></td><td>{r.confidence==null?"—":`${Number(r.confidence).toFixed(0)}%`}<small>{r.data_completeness==null?"":`${Number(r.data_completeness).toFixed(0)}% complete`}</small></td><td><Badge>{r.freshness_status}</Badge></td><td><Badge>{r.action}</Badge></td></tr>)}</tbody></table></div></section></>}
- {selected&&<div style={{position:"fixed",inset:0,background:"rgba(23,32,51,.35)",display:"grid",placeItems:"center",padding:20,zIndex:20}} onClick={()=>setSelected(null)}><div className="card" style={{width:"min(900px,100%)",maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}><div style={{display:"flex",justifyContent:"space-between"}}><div><div className="eyebrow">INVESTMENT INTELLIGENCE</div><h2>{selected.company_name}</h2><p>{selected.symbol} · {selected.sector}</p></div><button onClick={()=>setSelected(null)}>Close</button></div><div className="grid" style={{gridTemplateColumns:"repeat(5,1fr)"}}><ScoreCard label="LONG-TERM" value={selected.long_term_score} grade={selected.long_term_grade}/><ScoreCard label="SHORT-TERM" value={selected.short_term_score} grade={selected.short_term_grade}/><ScoreCard label="RISK" value={selected.risk_score}/><ScoreCard label="VALUATION" value={selected.valuation_score}/><ScoreCard label="FINAL AI" value={selected.final_ai_score} grade={selected.rating}/></div><div className="grid" style={{gridTemplateColumns:"repeat(2,1fr)",marginTop:16}}><div className="card" style={{margin:0}}><span className="label">CONFIDENCE</span><h2>{selected.confidence==null?"—":`${Number(selected.confidence).toFixed(0)}%`}</h2></div><div className="card" style={{margin:0}}><span className="label">DATA COMPLETENESS</span><h2>{selected.data_completeness==null?"—":`${Number(selected.data_completeness).toFixed(0)}%`}</h2><Badge>{selected.freshness_status}</Badge></div></div><div style={{marginTop:18}}><span className="label">FACTOR CONTRIBUTIONS</span>{Object.entries(selected.breakdown.long_term?.factors||{}).map(([k,v])=><p key={k} style={{margin:"8px 0"}}><strong>{k}</strong>: {score(v.score)} / 100 · weight {v.weight}</p>)}<div style={{marginTop:14}}>{Object.entries(selected.breakdown.short_term?.factors||{}).map(([k,v])=><p key={k} style={{margin:"8px 0"}}><strong>Short-term · {k}</strong>: {score(v.score)} / 100 · weight {v.weight}</p>)}</div></div><div style={{marginTop:18}}><span className="label">TOP POSITIVES</span><p>{(selected.breakdown.positives||[]).map(x=>`${x.factor} (${score(x.score)})`).join(" · ")||"None recorded."}</p><span className="label">TOP NEGATIVES</span><p>{(selected.breakdown.negatives||[]).map(x=>`${x.factor} (${score(x.score)})`).join(" · ")||"None recorded."}</p></div><div style={{marginTop:18}}><span className="label">MODEL ACTION</span><p><Badge>{selected.action}</Badge></p><span className="label">DATA FRESHNESS</span><p>{selected.freshness_status}</p><span className="label">SCORER VERSION</span><p>{selected.score_version}</p></div></div></div>}
- </main>;
+
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+const fmt = (v) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(1);
+
+function Badge({ children }) {
+  const v = String(children || "").toUpperCase();
+  const style = ["BUY", "ACCUMULATE", "EXCELLENT", "STRONG", "FRESH", "LOW"].includes(v)
+    ? { background: "#e8f7ef", color: "#137a46" }
+    : ["HOLD", "GOOD", "AVERAGE", "ACCEPTABLE", "MODERATE", "NEUTRAL"].includes(v)
+      ? { background: "#eef3ff", color: "#3159a6" }
+      : { background: "#fff5df", color: "#9a6500" };
+  return <span style={{ ...style, display: "inline-block", borderRadius: 999, padding: "5px 9px", fontSize: 11, fontWeight: 800 }}>{children}</span>;
+}
+
+function ScoreCard({ label, value, grade }) {
+  return <div className="card" style={{ margin: 0 }}><span className="label">{label}</span><h2 style={{ margin: "6px 0 2px" }}>{fmt(value)}<small style={{ fontSize: 13, fontWeight: 500 }}>/100</small></h2>{grade ? <Badge>{grade}</Badge> : null}</div>;
+}
+
+export default function AIPage() {
+  const [session, setSession] = useState(null), [rows, setRows] = useState([]), [loading, setLoading] = useState(true), [error, setError] = useState(""), [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    async function init() {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      setSession(data.session || null);
+      if (data.session) await load(data.session.user.id); else setLoading(false);
+    }
+    init();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
+      if (!mounted) return;
+      setSession(next || null);
+      if (next) load(next.user.id); else { setRows([]); setLoading(false); }
+    });
+    return () => { mounted = false; listener.subscription.unsubscribe(); };
+  }, []);
+
+  async function load(userId) {
+    setLoading(true); setError("");
+    try {
+      const { data: holdings, error: he } = await supabase.from("holdings").select("instrument_id").eq("user_id", userId);
+      if (he) throw he;
+      const ids = [...new Set((holdings || []).map(x => x.instrument_id).filter(Boolean))];
+      if (!ids.length) { setRows([]); return; }
+      const [{ data: instruments, error: ie }, { data: scores, error: se }] = await Promise.all([
+        supabase.from("instruments").select("id,symbol,company_name,sector").in("id", ids),
+        supabase.from("ai_scores").select("instrument_id,long_term_score,short_term_score,risk_score,valuation_score,final_ai_score,total_score,confidence,data_completeness,freshness_status,score_version,action,rating,score_breakdown").in("instrument_id", ids)
+      ]);
+      if (ie) throw ie; if (se) throw se;
+      const im = new Map((instruments || []).map(x => [x.id, x])), sm = new Map((scores || []).map(x => [x.instrument_id, x]));
+      const merged = ids.map(id => {
+        const i = im.get(id) || {}, a = sm.get(id) || {}, b = a.score_breakdown || {};
+        return { instrument_id: id, symbol: i.symbol || "—", company_name: i.company_name || "Unknown Stock", sector: i.sector || "OTHER", long_term_score: a.long_term_score ?? a.total_score ?? null, long_term_grade: b.long_term?.grade || null, short_term_score: a.short_term_score ?? null, short_term_grade: b.short_term?.grade || null, risk_score: a.risk_score ?? null, valuation_score: a.valuation_score ?? null, final_ai_score: a.final_ai_score ?? a.total_score ?? null, confidence: a.confidence ?? null, data_completeness: a.data_completeness ?? null, freshness_status: a.freshness_status || "MISSING", action: a.action || "—", rating: a.rating || "—", score_version: a.score_version || "legacy", breakdown: b };
+      });
+      setRows(merged.sort((a, b) => (b.final_ai_score ?? -1) - (a.final_ai_score ?? -1)));
+    } catch (e) { console.error("AI page load failed", e); setError(e?.message || "Unable to load AI scores."); }
+    finally { setLoading(false); }
+  }
+
+  const averages = useMemo(() => {
+    const average = key => { const values = rows.map(r => r[key]).filter(v => v != null && Number.isFinite(Number(v))); return values.length ? values.reduce((s, v) => s + Number(v), 0) / values.length : null; };
+    return { long: average("long_term_score"), short: average("short_term_score"), risk: average("risk_score"), valuation: average("valuation_score"), final: average("final_ai_score") };
+  }, [rows]);
+
+  if (!session) return <main className="shell"><section className="card"><h1>Sign in required</h1><p>Please sign in on the main dashboard first.</p><a href="/">Go to Dashboard</a></section></main>;
+
+  return <main className="shell">
+    <header className="topbar"><div><div className="eyebrow">PORTFOLIO AI / INTELLIGENCE</div><h1>AI Investment View</h1><p>Separate business quality from current market opportunity.</p></div><div style={{ display: "flex", gap: 8 }}><a href="/" style={{ textDecoration: "none" }}><button>Portfolio</button></a><button onClick={() => supabase.auth.signOut()}>Sign out</button></div></header>
+    {error ? <div className="error">{error}</div> : null}
+    {loading ? <div className="card">Loading AI intelligence…</div> : null}
+    {!loading ? <>
+      <section className="grid" style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}><ScoreCard label="AVERAGE LONG-TERM" value={averages.long}/><ScoreCard label="AVERAGE SHORT-TERM" value={averages.short}/><ScoreCard label="AVERAGE RISK" value={averages.risk}/><ScoreCard label="AVERAGE VALUATION" value={averages.valuation}/><ScoreCard label="AVERAGE FINAL" value={averages.final}/></section>
+      <section className="card"><div className="eyebrow">HOW TO READ THIS</div><p><strong>Long-term</strong> evaluates multi-year business quality. <strong>Short-term</strong> evaluates the current market setup. Risk, valuation, confidence and freshness remain independent signals.</p></section>
+      <section className="card"><div style={{ overflowX: "auto" }}><table><thead><tr><th>Company</th><th>Long-term</th><th>Short-term</th><th>Risk</th><th>Valuation</th><th>Final AI</th><th>Confidence</th><th>Freshness</th><th>Decision</th></tr></thead><tbody>{rows.map(r => <tr key={r.instrument_id} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}><td><strong>{r.company_name}</strong><small>{r.symbol} · {r.sector}</small></td><td><strong>{fmt(r.long_term_score)}</strong><small>{r.long_term_grade || "—"}</small></td><td><strong>{fmt(r.short_term_score)}</strong><small>{r.short_term_grade || "—"}</small></td><td>{fmt(r.risk_score)}</td><td>{fmt(r.valuation_score)}</td><td><strong>{fmt(r.final_ai_score)}</strong><small>{r.rating}</small></td><td>{r.confidence == null ? "—" : `${Number(r.confidence).toFixed(0)}%`}<small>{r.data_completeness == null ? "" : `${Number(r.data_completeness).toFixed(0)}% complete`}</small></td><td><Badge>{r.freshness_status}</Badge></td><td><Badge>{r.action}</Badge></td></tr>)}</tbody></table>{!rows.length ? <p>No scored holdings are available yet.</p> : null}</div></section>
+    </> : null}
+    {selected ? <div onClick={() => setSelected(null)} style={{ position: "fixed", inset: 0, background: "rgba(23,32,51,.35)", display: "grid", placeItems: "center", padding: 20, zIndex: 20 }}><div className="card" onClick={e => e.stopPropagation()} style={{ width: "min(900px,100%)", maxHeight: "90vh", overflowY: "auto" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><div><div className="eyebrow">INVESTMENT INTELLIGENCE</div><h2>{selected.company_name}</h2><p>{selected.symbol} · {selected.sector}</p></div><button onClick={() => setSelected(null)}>Close</button></div><div className="grid" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}><ScoreCard label="LONG-TERM" value={selected.long_term_score} grade={selected.long_term_grade}/><ScoreCard label="SHORT-TERM" value={selected.short_term_score} grade={selected.short_term_grade}/><ScoreCard label="RISK" value={selected.risk_score}/><ScoreCard label="VALUATION" value={selected.valuation_score}/><ScoreCard label="FINAL AI" value={selected.final_ai_score} grade={selected.rating}/></div><div style={{ marginTop: 18 }}><span className="label">MODEL ACTION</span><p><Badge>{selected.action}</Badge></p><span className="label">CONFIDENCE / DATA</span><p>{selected.confidence == null ? "—" : `${Number(selected.confidence).toFixed(0)}% confidence`} · {selected.data_completeness == null ? "—" : `${Number(selected.data_completeness).toFixed(0)}% complete`} · {selected.freshness_status}</p><span className="label">WHY</span><p>{selected.breakdown.reason || "Decision combines long-term quality, short-term opportunity, risk, valuation and data confidence."}</p><span className="label">SCORER VERSION</span><p>{selected.score_version}</p></div></div></div> : null}
+  </main>;
 }
