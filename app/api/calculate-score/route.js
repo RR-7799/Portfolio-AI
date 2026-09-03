@@ -2,286 +2,67 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "ai_scorer_v5_0";
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
-const clamp = (v, min = 0, max = 100) => Math.max(min, Math.min(max, v));
-const round = (v) => v == null ? null : Number(v.toFixed(1));
-const avg = (xs) => { const a = xs.filter((x) => x != null && Number.isFinite(x)); return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null; };
+const ENGINE_VERSION = "ai_scorer_v5_1";
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const n = v => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+const clamp = (v,a=0,b=100) => Math.max(a,Math.min(b,v));
+const round = v => v == null ? null : Number(Number(v).toFixed(1));
+const avg = xs => { const a=xs.filter(x=>x!=null&&Number.isFinite(x)); return a.length?a.reduce((s,x)=>s+x,0)/a.length:null; };
+const admin = () => { if(!URL||!KEY) throw new Error("Supabase service configuration is missing."); return createClient(URL,KEY,{auth:{autoRefreshToken:false,persistSession:false}}); };
 
-function adminClient() {
-  if (!supabaseUrl || !serviceKey) throw new Error("Supabase service configuration is missing.");
-  return createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+function percentile(value, peers){ const v=n(value), p=peers.map(n).filter(x=>x!=null).sort((a,b)=>a-b); if(v==null||p.length<3)return null; let below=0,equal=0; for(const x of p){if(x<v)below++;else if(x===v)equal++;} return clamp(((below+Math.max(0,equal-1)/2)/Math.max(1,p.length-1))*100); }
+function higher(value, peers){return percentile(value,peers);}
+function lower(value, peers){const p=percentile(value,peers);return p==null?null:100-p;}
+function band(v,bands){v=n(v);if(v==null)return null;for(const b of bands)if(v<=b.max)return clamp(b.score);return bands[bands.length-1].score;}
+function growthScore(v){return band(v,[{max:-20,score:10},{max:-5,score:30},{max:0,score:45},{max:5,score:58},{max:10,score:68},{max:15,score:78},{max:25,score:88},{max:40,score:95},{max:Infinity,score:100}]);}
+function roeScore(v){return band(v,[{max:-5,score:10},{max:0,score:20},{max:5,score:38},{max:8,score:50},{max:12,score:65},{max:18,score:80},{max:25,score:90},{max:Infinity,score:96}]);}
+function roceScore(v){return band(v,[{max:-5,score:10},{max:0,score:20},{max:5,score:40},{max:8,score:55},{max:12,score:68},{max:18,score:82},{max:25,score:92},{max:Infinity,score:97}]);}
+function debtScore(v){v=n(v);if(v==null)return null;return band(v,[{max:0,score:95},{max:.25,score:90},{max:.5,score:82},{max:1,score:70},{max:1.5,score:55},{max:2.5,score:38},{max:4,score:20},{max:Infinity,score:5}]);}
+function cashScore(v){v=n(v);if(v==null)return null;return v>0?70:25;}
+function ownershipScore(f,sector){
+  const pledge=n(f.promoter_pledge); const promoter=n(f.promoter_holding); const fii=n(f.fii_holding),dii=n(f.dii_holding);
+  const parts=[];
+  if(pledge!=null) parts.push({score:clamp(100-pledge*2),weight:45});
+  if(promoter!=null && sector!=="BANKING") parts.push({score:promoter===0?35:clamp(45+promoter),weight:30});
+  if(fii!=null||dii!=null) parts.push({score:clamp(45+(fii||0)*.5+(dii||0)*.25),weight:25});
+  if(!parts.length)return null;const w=parts.reduce((s,x)=>s+x.weight,0);return parts.reduce((s,x)=>s+x.score*x.weight,0)/w;
 }
-
-function percentile(value, peers) {
-  const v = n(value);
-  const p = peers.map(n).filter((x) => x != null).sort((a, b) => a - b);
-  if (v == null || p.length < 3) return null;
-  let below = 0, equal = 0;
-  for (const x of p) { if (x < v) below += 1; else if (x === v) equal += 1; }
-  return clamp(((below + Math.max(0, equal - 1) / 2) / Math.max(1, p.length - 1)) * 100);
+function valuationScore(f,peers){
+  const pe=n(f.pe_ratio),pb=n(f.pb_ratio),parts=[];
+  if(pe!=null&&pe>0){const rel=lower(pe,peers.map(x=>x.pe_ratio).filter(x=>n(x)>0));const abs=band(pe,[{max:8,score:95},{max:12,score:85},{max:18,score:72},{max:25,score:60},{max:40,score:45},{max:70,score:25},{max:120,score:10},{max:Infinity,score:5}]);parts.push({score:rel==null?abs:rel*.55+abs*.45,weight:65});}
+  if(pb!=null&&pb>0){const rel=lower(pb,peers.map(x=>x.pb_ratio).filter(x=>n(x)>0));const abs=band(pb,[{max:1,score:95},{max:1.5,score:85},{max:2,score:75},{max:3,score:62},{max:5,score:45},{max:8,score:25},{max:12,score:10},{max:Infinity,score:5}]);parts.push({score:rel==null?abs:rel*.55+abs*.45,weight:35});}
+  if(!parts.length)return {score:null,reason:"No valid positive valuation multiple available; negative/missing P/E is not treated as cheap."};const w=parts.reduce((s,x)=>s+x.weight,0);return {score:parts.reduce((s,x)=>s+x.score*x.weight,0)/w,reason:"Valuation uses valid positive multiples with absolute reasonableness and sector-relative context; negative/missing P/E is not treated as cheap."};
 }
-
-function higherBetter(value, peers) { return percentile(value, peers); }
-function lowerBetter(value, peers) {
-  const p = percentile(value, peers);
-  return p == null ? null : 100 - p;
+function freshness(updated){if(!updated)return"MISSING";const age=(Date.now()-new Date(updated).getTime())/86400000;if(!Number.isFinite(age))return"MISSING";if(age<=7)return"FRESH";if(age<=30)return"ACCEPTABLE";if(age<=90)return"AGING";if(age<=180)return"STALE";return"VERY_STALE";}
+function completeness(f,t){const fields=["sales_growth","profit_growth","roe","roce","debt_to_equity","operating_cash_flow","promoter_holding","promoter_pledge","fii_holding","dii_holding","pe_ratio","pb_ratio"];const p=fields.filter(k=>n(f?.[k])!=null).length;return clamp(((p+(t?.available?5:0))/(fields.length+5))*100);}
+function buildLong(f,peers,sector){
+ const valuation=valuationScore(f,peers); const factors=[];
+ const add=(name,score,weight,source)=>factors.push({name,score,weight,source});
+ const g=avg([growthScore(f.sales_growth),growthScore(f.profit_growth)]);if(g!=null)add("Growth",g,25,"sales/profit growth");
+ const prof=avg([roeScore(f.roe),sector==="BANKING"?null:roceScore(f.roce)]);if(prof!=null)add("Profitability / capital efficiency",prof,30,"ROE/ROCE");
+ const debt=debtScore(f.debt_to_equity);if(debt!=null)add("Leverage",debt,10,"debt-to-equity");
+ const cash=cashScore(f.operating_cash_flow);if(cash!=null)add("Operating cash flow",cash,10,"OCF sign; magnitude is not cross-company comparable");
+ const own=ownershipScore(f,sector);if(own!=null)add("Ownership / alignment",own,10,"promoter/institutional ownership and pledge where available");
+ if(valuation.score!=null)add("Valuation",valuation.score,15,"P/E/PB");
+ const w=factors.reduce((s,x)=>s+x.weight,0),score=w?factors.reduce((s,x)=>s+x.score*x.weight,0)/w:null;
+ const unavailable=[];if(f.net_profit==null)unavailable.push("Earnings consistency");unavailable.push("Operating margin");unavailable.push("Business/sector quality direct metric");if(f.shareholding_date==null)unavailable.push("Ownership change history");
+ return {score,factors,unavailable,valuation};
 }
-
-function rangeScore(value, goodLow, goodHigh, badLow, badHigh) {
-  const v = n(value);
-  if (v == null) return null;
-  if (v >= goodLow && v <= goodHigh) return 100;
-  if (v < badLow || v > badHigh) return 0;
-  if (v < goodLow) return clamp(((v - badLow) / (goodLow - badLow)) * 100);
-  return clamp(((badHigh - v) / (badHigh - goodHigh)) * 100);
+function buildShort(t,regime){
+ if(!t?.available)return{score:null,factors:[],reason:"Technical market data unavailable; no short-term score fabricated."};
+ const trend={STRONG_UPTREND:100,UPTREND:82,SIDEWAYS:55,DOWNTREND:35,STRONG_DOWNTREND:15}[t.trend]??50;
+ const r=n(t.momentum?.rsi14);const rsi=r==null?null:(r>=55&&r<=70?90:r>70?62:r>=45?58:30);
+ const mom=avg([n(t.momentum?.one_month)==null?null:clamp(50+n(t.momentum.one_month)*4),n(t.momentum?.three_month)==null?null:clamp(50+n(t.momentum.three_month)*2),n(t.momentum?.one_year)==null?null:clamp(50+n(t.momentum.one_year))]);
+ const vol=n(t.volatility?.volume_ratio_20d);const volume=vol==null?null:clamp(50+(vol-1)*35);const av=n(t.volatility?.annualized_20d_pct);const volatility=av==null?null:clamp(100-av*1.4);const regimeScore=regime==="BULL"?85:regime==="BEAR"?30:60;
+ const factors=[{name:"Price trend / moving averages",score:trend,weight:30},{name:"Momentum",score:mom,weight:25},{name:"RSI",score:rsi,weight:10},{name:"Volume behavior",score:volume,weight:10},{name:"Volatility",score:volatility,weight:10},{name:"Market regime",score:regimeScore,weight:15}].filter(x=>x.score!=null);const w=factors.reduce((s,x)=>s+x.weight,0);return{score:w?factors.reduce((s,x)=>s+x.score*x.weight,0)/w:null,factors,reason:`Technical structure from trend, momentum, RSI, volume, volatility and current ${regime||"market"} regime.`};
 }
+function risk(f,peers,t){const factors=[];const d=debtScore(f.debt_to_equity);if(d!=null)factors.push({name:"Leverage resilience",score:d,weight:30});const p=avg([roeScore(f.roe),roceScore(f.roce)]);if(p!=null)factors.push({name:"Profitability resilience",score:p,weight:25});const c=cashScore(f.operating_cash_flow);if(c!=null)factors.push({name:"Cash-flow resilience",score:c,weight:25});const av=t?.available?n(t.volatility?.annualized_20d_pct):null;if(av!=null)factors.push({name:"Market volatility",score:clamp(100-av*1.5),weight:20});const w=factors.reduce((s,x)=>s+x.weight,0);return{score:w?factors.reduce((s,x)=>s+x.score*x.weight,0)/w:null,factors};}
+function grade(v,type){if(v==null)return"Unavailable";if(type==="lt")return v>=90?"Exceptional":v>=80?"Excellent":v>=70?"Good":v>=60?"Average":v>=50?"Weak":"Poor";if(type==="st")return v>=90?"Exceptional setup":v>=80?"Strong":v>=70?"Positive":v>=60?"Neutral":v>=50?"Weak":"Poor setup";return v>=90?"Exceptional":v>=85?"Very Strong":v>=75?"Strong":v>=65?"Good/Average":v>=55?"Weak":v>=45?"Poor":"Very Poor";}
+function finalScore(lt,st,r,v){const parts=[[lt,.5],[st,.25],[r,.15],[v,.1]].filter(x=>x[0]!=null);if(!parts.length)return null;const w=parts.reduce((s,x)=>s+x[1],0);return parts.reduce((s,x)=>s+x[0]*x[1],0)/w;}
+async function technicalFor(symbol){const base=process.env.NEXT_PUBLIC_APP_URL||(process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:null);if(!base||!symbol)return null;try{const r=await fetch(`${base}/api/market-intelligence?isin=${encodeURIComponent(symbol)}&days=365`,{cache:"no-store"});if(!r.ok)return null;const b=await r.json();return b?.success?b.technical:null;}catch{return null;}}
+function confidence(comp,fresh,lt,st,r,v){const freshnessWeight={FRESH:100,ACCEPTABLE:85,AGING:65,STALE:40,VERY_STALE:20,MISSING:0}[fresh]??0;const vals=[lt,st,r,v].filter(x=>x!=null);const mean=avg(vals);const dispersion=mean==null?25:Math.sqrt(avg(vals.map(x=>(x-mean)**2))||0);return clamp(comp*.45+freshnessWeight*.35+(100-dispersion)*.20);}
+function action(lt,st,r,v,conf){if(lt==null||conf<45)return"WATCH";if(lt>=80&&st!=null&&st>=75&&(r==null||r>=55)&&(v==null||v>=45))return"BUY";if(lt>=75&&st!=null&&st>=60&&(r==null||r>=50))return"ACCUMULATE";if(lt>=70&&st!=null&&st<50)return"HOLD";if(lt>=70)return"HOLD";if(lt<50&&(r==null||r<40))return"REDUCE";return"WATCH";}
+function record(f,inst,peers,t,regime){const fresh=freshness(f?.updated_at),lt=buildLong(f,peers,inst.sector||"OTHER"),st=buildShort(t,regime),r=risk(f,peers,t),v=lt.valuation,comp=completeness(f,t),conf=confidence(comp,fresh,lt.score,st.score,r.score,v.score),fin=finalScore(lt.score,st.score,r.score,v.score),act=action(lt.score,st.score,r.score,v.score,conf);const positives=[...lt.factors,...st.factors].filter(x=>x.score>=70).map(x=>({factor:x.name,score:round(x.score)}));const negatives=[...lt.factors,...st.factors].filter(x=>x.score<50).map(x=>({factor:x.name,score:round(x.score)}));return{long_term_score:round(lt.score),short_term_score:round(st.score),risk_score:round(r.score),valuation_score:round(v.score),final_ai_score:round(fin),total_score:round(fin),confidence:round(conf),data_completeness:round(comp),freshness_status:fresh,score_version:ENGINE_VERSION,calculation_metadata:{engine_version:ENGINE_VERSION,calculated_at:new Date().toISOString(),regime,peer_count:peers.length,missing_factors:lt.unavailable},score_breakdown:{long_term:{grade:grade(lt.score,"lt"),factors:Object.fromEntries(lt.factors.map(x=>[x.name,{score:round(x.score),weight:x.weight,source:x.source}]))},short_term:{grade:grade(st.score,"st"),factors:Object.fromEntries(st.factors.map(x=>[x.name,{score:round(x.score),weight:x.weight}]))},risk:{score:round(r.score),factors:Object.fromEntries(r.factors.map(x=>[x.name,{score:round(x.score),weight:x.weight}]))},valuation:{score:round(v.score),reason:v.reason},unavailable_factors:lt.unavailable,positives,negatives,reason:lt.score!=null&&st.score!=null&&lt.score>=75&&st.score<55?"Strong long-term business quality, but the current short-term setup does not justify aggressive buying.":lt.score!=null&&st.score!=null&&lt.score<65&&st.score>=80?"Current technical setup is attractive, but long-term business quality is not strong enough to treat this as a core investment.":"Decision combines long-term business quality, current opportunity, risk, valuation and data confidence."},rating:grade(fin,"final"),action:act,risk_level:r.score==null?"UNKNOWN":r.score>=75?"LOW":r.score>=55?"MODERATE":r.score>=40?"HIGH":"CRITICAL",ai_summary:`${inst.company_name||inst.symbol}: LT ${round(lt.score)??"—"}/100; ST ${round(st.score)??"—"}/100; Risk ${round(r.score)??"—"}/100; Valuation ${round(v.score)??"—"}/100; Final ${round(fin)??"—"}/100. Data completeness ${round(comp)}%, confidence ${round(conf)}%, freshness ${fresh}.`};}
 
-function freshnessStatus(updatedAt) {
-  if (!updatedAt) return "MISSING";
-  const age = (Date.now() - new Date(updatedAt).getTime()) / 86400000;
-  if (!Number.isFinite(age)) return "MISSING";
-  if (age <= 7) return "FRESH";
-  if (age <= 30) return "ACCEPTABLE";
-  if (age <= 90) return "AGING";
-  if (age <= 180) return "STALE";
-  return "VERY_STALE";
-}
-
-function scoreDataQuality(fundamental, technical) {
-  const fields = [
-    "sales_growth", "profit_growth", "roe", "roce", "debt_to_equity",
-    "operating_cash_flow", "net_profit", "promoter_holding", "fii_holding",
-    "dii_holding", "pe_ratio", "pb_ratio"
-  ];
-  const present = fields.filter((k) => n(fundamental?.[k]) != null).length;
-  const technicalPoints = technical?.available ? 5 : 0;
-  const total = fields.length + 5;
-  return clamp(((present + technicalPoints) / total) * 100);
-}
-
-function valuationScore(f, peers) {
-  const pe = n(f.pe_ratio), pb = n(f.pb_ratio);
-  const parts = [];
-  if (pe != null && pe > 0) parts.push({ score: lowerBetter(pe, peers.map(x => x.pe_ratio).filter(x => n(x) > 0)), weight: 0.65 });
-  if (pb != null && pb > 0) parts.push({ score: lowerBetter(pb, peers.map(x => x.pb_ratio).filter(x => n(x) > 0)), weight: 0.35 });
-  if (!parts.length) return { score: null, reason: "No valid positive valuation multiple available." };
-  const valid = parts.filter(x => x.score != null);
-  const totalW = valid.reduce((s, x) => s + x.weight, 0);
-  return { score: totalW ? valid.reduce((s, x) => s + x.score * x.weight, 0) / totalW : null, reason: "Relative valuation using valid positive multiples; negative/missing P/E is not treated as cheap." };
-}
-
-function buildLongTerm(f, peers) {
-  const growth = avg([
-    higherBetter(f.sales_growth, peers.map(x => x.sales_growth)),
-    higherBetter(f.profit_growth, peers.map(x => x.profit_growth))
-  ]);
-  const profitability = avg([
-    higherBetter(f.roe, peers.map(x => x.roe)),
-    higherBetter(f.roce, peers.map(x => x.roce))
-  ]);
-  const debt = lowerBetter(f.debt_to_equity, peers.map(x => x.debt_to_equity));
-  const cash = higherBetter(f.operating_cash_flow, peers.map(x => x.operating_cash_flow));
-  const ownership = avg([
-    higherBetter(f.promoter_holding, peers.map(x => x.promoter_holding)),
-    higherBetter(f.fii_holding, peers.map(x => x.fii_holding)),
-    higherBetter(f.dii_holding, peers.map(x => x.dii_holding))
-  ]);
-  const valuation = valuationScore(f, peers).score;
-
-  const factors = [
-    ["Growth", growth, 20],
-    ["Profitability / capital efficiency", profitability, 25],
-    ["Leverage", debt, 10],
-    ["Operating cash flow", cash, 15],
-    ["Ownership", ownership, 10],
-    ["Valuation", valuation, 10]
-  ];
-  const valid = factors.filter(x => x[1] != null);
-  const weight = valid.reduce((s, x) => s + x[2], 0);
-  const score = weight ? valid.reduce((s, x) => s + x[1] * x[2], 0) / weight : null;
-  return { score, factors, valuationReason: valuationScore(f, peers).reason };
-}
-
-function buildShortTerm(technical, regimeLabel) {
-  if (!technical?.available) return { score: null, factors: [], reason: "Technical market data unavailable; no short-term score fabricated." };
-  const trend = technical.trend;
-  const trendScore = { STRONG_UPTREND: 100, UPTREND: 82, SIDEWAYS: 55, DOWNTREND: 35, STRONG_DOWNTREND: 15 }[trend] ?? 50;
-  const rsi = n(technical.momentum?.rsi14);
-  const rsiScore = rsi == null ? null : (rsi >= 55 && rsi <= 70 ? 90 : rsi > 70 ? 62 : rsi >= 45 ? 58 : 30);
-  const oneMonth = n(technical.momentum?.one_month);
-  const threeMonth = n(technical.momentum?.three_month);
-  const year = n(technical.momentum?.one_year);
-  const momentum = avg([
-    oneMonth == null ? null : clamp(50 + oneMonth * 4),
-    threeMonth == null ? null : clamp(50 + threeMonth * 2),
-    year == null ? null : clamp(50 + year)
-  ]);
-  const volumeRatio = n(technical.volatility?.volume_ratio_20d);
-  const volumeScore = volumeRatio == null ? null : clamp(50 + (volumeRatio - 1) * 35);
-  const volatility = n(technical.volatility?.annualized_20d_pct);
-  const volatilityScore = volatility == null ? null : clamp(100 - volatility * 1.4);
-  const regimeScore = regimeLabel === "BULL" ? 85 : regimeLabel === "BEAR" ? 30 : 60;
-  const factors = [
-    ["Price trend / moving averages", trendScore, 30],
-    ["Momentum", momentum, 25],
-    ["RSI", rsiScore, 10],
-    ["Volume behavior", volumeScore, 10],
-    ["Volatility", volatilityScore, 10],
-    ["Market regime", regimeScore, 15]
-  ];
-  const valid = factors.filter(x => x[1] != null);
-  const weight = valid.reduce((s, x) => s + x[2], 0);
-  const score = weight ? valid.reduce((s, x) => s + x[1] * x[2], 0) / weight : null;
-  return { score, factors, reason: `Technical structure from trend, momentum, RSI, volume, volatility and current ${regimeLabel || "market"} regime.` };
-}
-
-function riskScore(f, peers, technical) {
-  const debt = lowerBetter(f.debt_to_equity, peers.map(x => x.debt_to_equity));
-  const profitability = avg([
-    higherBetter(f.roe, peers.map(x => x.roe)),
-    higherBetter(f.roce, peers.map(x => x.roce))
-  ]);
-  const cash = higherBetter(f.operating_cash_flow, peers.map(x => x.operating_cash_flow));
-  const volatility = technical?.available ? clamp(100 - (n(technical.volatility?.annualized_20d_pct) || 0) * 1.5) : null;
-  const factors = [["Leverage resilience", debt, 30], ["Profitability resilience", profitability, 25], ["Cash-flow resilience", cash, 25], ["Market volatility", volatility, 20]];
-  const valid = factors.filter(x => x[1] != null);
-  const w = valid.reduce((s, x) => s + x[2], 0);
-  return { score: w ? valid.reduce((s, x) => s + x[1] * x[2], 0) / w : null, factors };
-}
-
-function grade(score, type) {
-  if (score == null) return "Unavailable";
-  if (type === "lt") return score >= 90 ? "Exceptional" : score >= 80 ? "Excellent" : score >= 70 ? "Good" : score >= 60 ? "Average" : score >= 50 ? "Weak" : "Poor";
-  if (type === "st") return score >= 90 ? "Exceptional setup" : score >= 80 ? "Strong" : score >= 70 ? "Positive" : score >= 60 ? "Neutral" : score >= 50 ? "Weak" : "Poor setup";
-  return score >= 90 ? "Exceptional" : score >= 85 ? "Very Strong" : score >= 75 ? "Strong" : score >= 65 ? "Good/Average" : score >= 55 ? "Weak" : score >= 45 ? "Poor" : "Very Poor";
-}
-
-function finalScore(lt, st, risk, valuation) {
-  const parts = [[lt, 0.50], [st, 0.25], [risk, 0.15], [valuation, 0.10]].filter(x => x[0] != null);
-  if (!parts.length) return null;
-  const w = parts.reduce((s, x) => s + x[1], 0);
-  return parts.reduce((s, x) => s + x[0] * x[1], 0) / w;
-}
-
-async function technicalFor(symbol) {
-  const base = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-  if (!base || !symbol) return null;
-  try {
-    const r = await fetch(`${base}/api/market-intelligence?isin=${encodeURIComponent(symbol)}&days=365`, { cache: "no-store" });
-    if (!r.ok) return null;
-    const body = await r.json();
-    return body?.success ? body.technical : null;
-  } catch { return null; }
-}
-
-function completenessFor(f, technical) { return scoreDataQuality(f, technical); }
-function confidenceFor(completeness, freshness, lt, st, risk, valuation) {
-  const fresh = { FRESH: 100, ACCEPTABLE: 85, AGING: 65, STALE: 40, VERY_STALE: 20, MISSING: 0 }[freshness] ?? 0;
-  const scores = [lt, st, risk, valuation].filter(x => x != null);
-  const dispersion = scores.length > 1 ? Math.sqrt(avg(scores.map(x => (x - avg(scores)) ** 2)) || 0) : 25;
-  return clamp(completeness * 0.45 + fresh * 0.35 + (100 - dispersion) * 0.20);
-}
-
-function actionFor(lt, st, risk, valuation, confidence) {
-  if (lt == null) return "WATCH";
-  if (confidence < 45) return "WATCH";
-  if (lt >= 80 && st != null && st >= 75 && (risk == null || risk >= 55) && (valuation == null || valuation >= 45)) return "BUY";
-  if (lt >= 75 && st != null && st >= 60 && (risk == null || risk >= 50)) return "ACCUMULATE";
-  if (lt >= 70 && st != null && st < 50) return "HOLD";
-  if (lt >= 70) return "HOLD";
-  if (lt >= 60 && st != null && st >= 70) return "WATCH";
-  if (lt < 50 && (risk == null || risk < 40)) return "REDUCE";
-  return "WATCH";
-}
-
-function buildRecord(f, instrument, peers, technical, regime) {
-  const freshness = freshnessStatus(f?.updated_at);
-  const lt = buildLongTerm(f, peers);
-  const st = buildShortTerm(technical, regime);
-  const risk = riskScore(f, peers, technical);
-  const valuation = valuationScore(f, peers);
-  const completeness = completenessFor(f, technical);
-  const confidence = confidenceFor(completeness, freshness, lt.score, st.score, risk.score, valuation.score);
-  const final = finalScore(lt.score, st.score, risk.score, valuation.score);
-  const action = actionFor(lt.score, st.score, risk.score, valuation.score, confidence);
-  const positives = [];
-  const negatives = [];
-  for (const [name, score] of lt.factors) { if (score == null) continue; (score >= 70 ? positives : negatives).push({ factor: name, score: round(score) }); }
-  for (const [name, score] of st.factors) { if (score == null) continue; (score >= 70 ? positives : negatives).push({ factor: `Short-term: ${name}`, score: round(score) }); }
-  const reason = lt.score != null && st.score != null && lt.score >= 75 && st.score < 55
-    ? "Strong long-term business quality, but the current short-term setup does not justify aggressive buying."
-    : lt.score != null && st.score != null && lt.score < 65 && st.score >= 80
-      ? "Current technical setup is attractive, but long-term business quality is not strong enough to treat this as a core investment."
-      : "Decision combines long-term business quality, current opportunity, risk, valuation and data confidence.";
-  return {
-    long_term_score: round(lt.score),
-    short_term_score: round(st.score),
-    risk_score: round(risk.score),
-    valuation_score: round(valuation.score),
-    final_ai_score: round(final),
-    total_score: round(final),
-    confidence: round(confidence),
-    data_completeness: round(completeness),
-    freshness_status: freshness,
-    score_version: ENGINE_VERSION,
-    calculation_metadata: { engine_version: ENGINE_VERSION, calculated_at: new Date().toISOString(), regime: regime || null, peer_count: peers.length },
-    score_breakdown: {
-      long_term: { grade: grade(lt.score, "lt"), factors: Object.fromEntries(lt.factors.map(([k, v, w]) => [k, { score: round(v), weight: w }])) },
-      short_term: { grade: grade(st.score, "st"), factors: Object.fromEntries(st.factors.map(([k, v, w]) => [k, { score: round(v), weight: w }])) },
-      risk: { score: round(risk.score), factors: Object.fromEntries(risk.factors.map(([k, v, w]) => [k, { score: round(v), weight: w }])) },
-      valuation: { score: round(valuation.score), reason: valuation.reason },
-      positives, negatives, reason
-    },
-    rating: grade(final, "final"),
-    action,
-    risk_level: risk.score == null ? "UNKNOWN" : risk.score >= 75 ? "LOW" : risk.score >= 55 ? "MODERATE" : risk.score >= 40 ? "HIGH" : "CRITICAL",
-    ai_summary: `${instrument.company_name || instrument.symbol}: LT ${round(lt.score) ?? "—"}/100 (${grade(lt.score, "lt")}); ST ${round(st.score) ?? "—"}/100 (${grade(st.score, "st")}); Risk ${round(risk.score) ?? "—"}; Valuation ${round(valuation.score) ?? "—"}; Final ${round(final) ?? "—"}. ${reason}`
-  };
-}
-
-export async function GET() {
-  try {
-    const supabase = adminClient();
-    const { data: holdings, error: hErr } = await supabase.from("holdings").select("id,user_id,instrument_id,quantity,invested_value,current_value");
-    if (hErr) return NextResponse.json({ success: false, step: "holdings", error: hErr.message }, { status: 500 });
-    const ids = [...new Set((holdings || []).map(h => h.instrument_id).filter(Boolean))];
-    if (!ids.length) return NextResponse.json({ success: false, step: "holdings", error: "No scoreable holdings found." }, { status: 400 });
-    const [{ data: instruments, error: iErr }, { data: fundamentals, error: fErr }, { data: regimeRows }] = await Promise.all([
-      supabase.from("instruments").select("id,symbol,company_name,sector").in("id", ids),
-      supabase.from("fundamentals").select("*").in("instrument_id", ids),
-      supabase.from("market_regime_history").select("regime").order("snapshot_at", { ascending: false }).limit(1)
-    ]);
-    if (iErr) return NextResponse.json({ success: false, step: "instruments", error: iErr.message }, { status: 500 });
-    if (fErr) return NextResponse.json({ success: false, step: "fundamentals", error: fErr.message }, { status: 500 });
-    const im = new Map((instruments || []).map(x => [x.id, x]));
-    const fm = new Map();
-    for (const f of fundamentals || []) { const old = fm.get(f.instrument_id); if (!old || new Date(f.updated_at || 0) > new Date(old.updated_at || 0)) fm.set(f.instrument_id, f); }
-    const regime = regimeRows?.[0]?.regime || "NEUTRAL";
-    const technicalCache = new Map();
-    const rows = (holdings || []).filter(h => im.has(h.instrument_id));
-    const results = [], skipped = [];
-    for (let i = 0; i < rows.length; i += 5) {
-      const batch = rows.slice(i, i + 5);
-      await Promise.all(batch.map(async (h) => {
-        const instrument = im.get(h.instrument_id), f = fm.get(h.instrument_id);
-        if (!f) { skipped.push({ instrument_id: h.instrument_id, symbol: instrument.symbol, reason: "Fundamentals not available." }); return; }
-        let technical = technicalCache.get(instrument.symbol);
-        if (technical === undefined) { technical = await technicalFor(instrument.symbol); technicalCache.set(instrument.symbol, technical || null); }
-        const peers = (fundamentals || []).filter(x => x.instrument_id !== h.instrument_id && (im.get(x.instrument_id)?.sector || "OTHER") === (instrument.sector || "OTHER"));
-        const score = buildRecord(f, instrument, peers, technical, regime);
-        const record = { user_id: h.user_id || null, instrument_id: h.instrument_id, ...score, calculated_at: new Date().toISOString(), score_date: new Date().toISOString() };
-        const { error } = await supabase.from("ai_scores").upsert(record, { onConflict: "instrument_id,user_id" });
-        if (error) { skipped.push({ instrument_id: h.instrument_id, symbol: instrument.symbol, reason: error.message }); return; }
-        results.push({ instrument_id: h.instrument_id, symbol: instrument.symbol, company_name: instrument.company_name, long_term_score: score.long_term_score, short_term_score: score.short_term_score, risk_score: score.risk_score, valuation_score: score.valuation_score, final_ai_score: score.final_ai_score, confidence: score.confidence, data_completeness: score.data_completeness, freshness_status: score.freshness_status, action: score.action });
-      }));
-    }
-    const scores = results.map(x => x.final_ai_score).filter(x => x != null);
-    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, summary: { total_holdings: holdings.length, scored: results.length, skipped: skipped.length, average_final_ai_score: scores.length ? round(avg(scores)) : null }, results, skipped });
-  } catch (error) {
-    console.error("AI scorer v5 error:", error);
-    return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "AI scoring failed." }, { status: 500 });
-  }
-}
+export async function GET(){try{const db=admin();const{data:holdings,error:hErr}=await db.from("holdings").select("id,user_id,instrument_id,quantity,invested_value,current_value");if(hErr)throw hErr;const ids=[...new Set((holdings||[]).map(h=>h.instrument_id).filter(Boolean))];if(!ids.length)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"No scoreable holdings found."},{status:400});const[{data:instruments,error:iErr},{data:fundamentals,error:fErr},{data:regimeRows}]=await Promise.all([db.from("instruments").select("id,symbol,company_name,sector").in("id",ids),db.from("fundamentals").select("*").in("instrument_id",ids),db.from("market_regime_history").select("regime").order("snapshot_at",{ascending:false}).limit(1)]);if(iErr)throw iErr;if(fErr)throw fErr;const im=new Map((instruments||[]).map(x=>[x.id,x])),fm=new Map();for(const f of fundamentals||[]){const old=fm.get(f.instrument_id);if(!old||new Date(f.updated_at||0)>new Date(old.updated_at||0))fm.set(f.instrument_id,f);}const regime=regimeRows?.[0]?.regime||"NEUTRAL",rows=(holdings||[]).filter(h=>im.has(h.instrument_id)),results=[],skipped=[];for(let i=0;i<rows.length;i+=5){await Promise.all(rows.slice(i,i+5).map(async h=>{const inst=im.get(h.instrument_id),f=fm.get(h.instrument_id);if(!f){skipped.push({instrument_id:h.instrument_id,symbol:inst.symbol,reason:"Fundamentals not available."});return;}let t=null;try{t=await technicalFor(inst.symbol);}catch{}const peers=(fundamentals||[]).filter(x=>x.instrument_id!==h.instrument_id&&(im.get(x.instrument_id)?.sector||"OTHER")===(inst.sector||"OTHER"));const score=record(f,inst,peers,t,regime);const row={user_id:h.user_id||null,instrument_id:h.instrument_id,...score,calculated_at:new Date().toISOString(),score_date:new Date().toISOString()};const{error}=await db.from("ai_scores").upsert(row,{onConflict:"instrument_id"});if(error){skipped.push({instrument_id:h.instrument_id,symbol:inst.symbol,reason:error.message});return;}const{error:histErr}=await db.from("ai_score_history").insert(row);if(histErr)console.warn("AI score history write failed",histErr.message);results.push({instrument_id:h.instrument_id,symbol:inst.symbol,company_name:inst.company_name,long_term_score:score.long_term_score,short_term_score:score.short_term_score,risk_score:score.risk_score,valuation_score:score.valuation_score,final_ai_score:score.final_ai_score,confidence:score.confidence,data_completeness:score.data_completeness,freshness_status:score.freshness_status,action:score.action});}));}const scores=results.map(x=>x.final_ai_score).filter(x=>x!=null);return NextResponse.json({success:true,engine_version:ENGINE_VERSION,summary:{total_holdings:holdings.length,scored:results.length,skipped:skipped.length,average_final_ai_score:scores.length?round(avg(scores)):null},results,skipped});}catch(error){console.error("AI scorer v5.1 error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"AI scoring failed."},{status:500});}}
