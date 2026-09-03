@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const money = (v) => Number(v || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 const scoreClass = (action) => ["BUY", "ACCUMULATE"].includes(action) ? "positive" : ["EXIT", "SELL", "REDUCE"].includes(action) ? "negative" : "";
-const clean = (v) => String(v || "").replace(/\s+/g, " ").trim().toUpperCase();
+const clean = (v) => String(v || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
 
 export default function PositionIntelligence() {
   const [session, setSession] = useState(null);
@@ -25,35 +25,58 @@ export default function PositionIntelligence() {
   useEffect(() => {
     if (!session) return undefined;
     let mounted = true;
-    supabase.from("instruments").select("id,company_name,symbol").then(({ data }) => { if (mounted) setInstruments(data || []); });
+    supabase.from("instruments").select("id,company_name,symbol").then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) console.error("Instrument lookup error:", error);
+      setInstruments(data || []);
+    });
     return () => { mounted = false; };
   }, [session]);
 
   useEffect(() => {
     const handler = async (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      const row = target?.closest("section table tbody tr");
+      const row = target?.closest("table tbody tr");
       if (!row) return;
-      const section = row.closest("section");
-      const heading = Array.from(section?.querySelectorAll("span,h2,h3") || []).find((node) => clean(node.textContent) === "STOCK HOLDINGS");
-      if (!heading) return;
 
       const cells = Array.from(row.children);
-      const companyText = clean(cells[0]?.textContent);
-      const cellTexts = cells.map((cell) => clean(cell.textContent)).filter(Boolean);
-      let instrument = instruments.find((x) => clean(x.company_name) === companyText);
-      if (!instrument) instrument = instruments.find((x) => cellTexts.includes(clean(x.company_name)) || (x.symbol && cellTexts.includes(clean(x.symbol))));
+      const firstCell = clean(cells[0]?.textContent);
+      const rowText = clean(row.textContent);
+      if (!firstCell && !rowText) return;
+
+      const instrument = instruments.find((x) => {
+        const company = clean(x.company_name);
+        const symbol = clean(x.symbol);
+        return company && (
+          firstCell === company ||
+          firstCell.startsWith(company) ||
+          rowText.includes(company) ||
+          (symbol && rowText.includes(symbol))
+        );
+      });
+
       if (!instrument?.id || !session?.access_token) return;
 
-      setOpen(true); setLoading(true); setError(""); setData(null);
+      setOpen(true);
+      setLoading(true);
+      setError("");
+      setData(null);
+
       try {
-        const response = await fetch(`/api/holding-intelligence?instrument_id=${encodeURIComponent(instrument.id)}`, { headers: { Authorization: `Bearer ${session.access_token}`, Accept: "application/json" }, cache: "no-store" });
+        const response = await fetch(`/api/holding-intelligence?instrument_id=${encodeURIComponent(instrument.id)}`, {
+          headers: { Authorization: `Bearer ${session.access_token}`, Accept: "application/json" },
+          cache: "no-store",
+        });
         const body = await response.json().catch(() => null);
         if (!response.ok || !body?.success) throw new Error(body?.error || "Unable to load position intelligence.");
         setData(body);
-      } catch (err) { setError(err.message || "Unable to load position intelligence."); }
-      finally { setLoading(false); }
+      } catch (err) {
+        setError(err.message || "Unable to load position intelligence.");
+      } finally {
+        setLoading(false);
+      }
     };
+
     document.addEventListener("click", handler);
     return () => document.removeEventListener("click", handler);
   }, [instruments, session]);
