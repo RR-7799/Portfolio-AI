@@ -34,27 +34,6 @@ export default function LiveQuoteDock() {
     setError("");
 
     try {
-      const { data: holdings, error: holdingsError } = await supabase
-        .from("holdings")
-        .select("instrument_id")
-        .eq("user_id", activeSession.user.id);
-
-      if (holdingsError) throw new Error(holdingsError.message);
-
-      const ids = [...new Set((holdings || []).map((x) => x.instrument_id).filter(Boolean))];
-
-      if (!ids.length) {
-        setRows([]);
-        return;
-      }
-
-      const { data: instruments, error: instrumentsError } = await supabase
-        .from("instruments")
-        .select("id,symbol,company_name")
-        .in("id", ids);
-
-      if (instrumentsError) throw new Error(instrumentsError.message);
-
       const response = await fetch("/api/market-quotes", {
         headers: {
           Authorization: `Bearer ${activeSession.access_token}`,
@@ -65,39 +44,30 @@ export default function LiveQuoteDock() {
 
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.success) {
-        throw new Error(body?.error || `Market quote request failed (${response.status})`);
+        const detail = body?.errors?.length ? ` ${body.errors.join("; ")}` : "";
+        throw new Error(body?.error || `Market quote request failed (${response.status}).${detail}`);
       }
 
-      const instrumentMap = new Map((instruments || []).map((x) => [String(x.id), x]));
-      const quoteRows = Object.entries(body.quotes || []).map(([key, quote]) => {
-        const token = quote?.instrument_token || key.replace(/^NSE_EQ:/, "NSE_EQ|");
-        const id = token.includes("|") ? token.split("|").slice(1).join("|") : token;
-        const instrument = instrumentMap.get(id);
-        const lastPrice = Number(quote?.last_price);
-        const previousClose = Number(quote?.cp);
-        const change = Number.isFinite(lastPrice) && Number.isFinite(previousClose)
-          ? lastPrice - previousClose
-          : null;
-        const changePct = Number.isFinite(lastPrice) && Number.isFinite(previousClose) && previousClose !== 0
-          ? (change / previousClose) * 100
-          : null;
-
-        return {
-          id,
-          symbol: instrument?.symbol || key.split(":").pop() || id,
-          companyName: instrument?.company_name || "Unknown stock",
-          lastPrice: Number.isFinite(lastPrice) ? lastPrice : null,
-          previousClose: Number.isFinite(previousClose) ? previousClose : null,
-          change,
-          changePct,
-        };
-      });
+      const quoteRows = Object.values(body.quotes || {}).map((quote) => ({
+        id: String(quote.instrument_id),
+        symbol: quote.symbol || String(quote.instrument_id),
+        companyName: quote.company_name || "Unknown stock",
+        lastPrice: Number.isFinite(Number(quote.last_price)) ? Number(quote.last_price) : null,
+        previousClose: Number.isFinite(Number(quote.previous_close)) ? Number(quote.previous_close) : null,
+        change: Number.isFinite(Number(quote.change)) ? Number(quote.change) : null,
+        changePct: Number.isFinite(Number(quote.change_pct)) ? Number(quote.change_pct) : null,
+      }));
 
       quoteRows.sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
       setRows(quoteRows);
       setUpdatedAt(body.fetched_at || new Date().toISOString());
+
+      if (body.skipped > 0 && !quoteRows.length) {
+        setError(`No NSE equity quotes returned. ${body.skipped} portfolio instruments were skipped because they do not have a supported NSE equity ISIN.`);
+      }
     } catch (quoteError) {
       console.error("Live quote error:", quoteError);
+      setRows([]);
       setError(quoteError?.message || "Unable to load live prices.");
     } finally {
       setLoading(false);
@@ -134,7 +104,7 @@ export default function LiveQuoteDock() {
 
   const positive = useMemo(() => rows.filter((x) => Number(x.changePct) >= 0).length, [rows]);
 
-  if (!session || (!open && !rows.length && !error)) return null;
+  if (!session || !open) return null;
 
   return (
     <div style={{
@@ -187,7 +157,7 @@ export default function LiveQuoteDock() {
                   </td>
                 </tr>
               ))}
-              {!rows.length && !loading && (
+              {!rows.length && !loading && !error && (
                 <tr><td colSpan="3" style={{ padding: 18, textAlign: "center", opacity: .6 }}>No LTP quotes returned.</td></tr>
               )}
             </tbody>
