@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_alerts_v1_4";
+const ENGINE_VERSION = "portfolio_alerts_v1_5";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 function userClient(token){return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});}
 function pipelineAuth(request){const secret=process.env.PIPELINE_SECRET; if(!secret)return false; const h=request.headers.get("x-pipeline-secret")||""; const a=request.headers.get("authorization")||""; return h===secret||a===`Bearer ${secret}`;}
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:0;};
+const up=v=>String(v||"").toUpperCase();
 
 async function generateForAllUsers(){
  const [h,i,s,m]=await Promise.all([
@@ -25,74 +26,76 @@ async function generateForAllUsers(){
   scoreHistory.set(row.instrument_id,list);
  }
  const sm=new Map([...scoreHistory].map(([id,list])=>[id,list[0]]));
- const users=[...new Set((h.data||[]).map(x=>x.user_id).filter(Boolean))]; const regime=m.data?.[0]||null; const previous=m.data?.[1]||null; const alerts=[];
+ const users=[...new Set((h.data||[]).map(x=>x.user_id).filter(Boolean))];
+ const regime=m.data?.[0]||null; const previous= m.data?.[1]||null; const alerts=[];
  for(const userId of users){
   const holdings=(h.data||[]).filter(x=>x.user_id===userId); const total=holdings.reduce((a,x)=>a+n(x.current_value),0); const sectorMap=new Map();
-  for(const x of holdings){const meta=im.get(x.instrument_id)||{};const sc=sm.get(x.instrument_id)||{};const history=scoreHistory.get(x.instrument_id)||[];const prior=history[1]||null;const b=sc.score_breakdown||{};const freshness=b.freshness||{};const weight=total>0?n(x.current_value)/total*100:0;const pnl=n(x.pnl_percentage);
-   if(weight>=10)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:weight>=15?"CRITICAL":"WARNING",type:"CONCENTRATION",title:`${meta.company_name||meta.symbol||"Position"} is oversized`,message:`Portfolio weight is ${weight.toFixed(1)}%, above the 10% concentration guardrail.`,dedupe_key:`CONCENTRATION:${x.instrument_id}:${Math.floor(weight)}`});
-   if(String(sc.risk_level||"").toUpperCase()==="HIGH")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"HIGH_RISK",title:`${meta.company_name||meta.symbol||"Holding"} is high risk`,message:`AI risk classification is HIGH with score ${sc.total_score??"—"}.`,dedupe_key:`HIGH_RISK:${x.instrument_id}`});
-   if(["MISSING","VERY_STALE","STALE"].includes(String(freshness.status||"").toUpperCase()))alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"INFO",type:"STALE_DATA",title:`${meta.company_name||meta.symbol||"Holding"} needs fresher data`,message:`Fundamental freshness is ${freshness.status||"MISSING"}; conviction is limited.`,dedupe_key:`STALE_DATA:${x.instrument_id}:${freshness.status||"MISSING"}`});
-   if(String(sc.action||"").toUpperCase()==="REDUCE")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:pnl<=-20?"CRITICAL":"WARNING",type:"REDUCE_SIGNAL",title:`Review ${meta.company_name||meta.symbol||"holding"}`,message:`AI model is currently flagging REDUCE.`,dedupe_key:`REDUCE_SIGNAL:${x.instrument_id}:${Math.floor(n(sc.total_score)/5)}`});
-   if(String(sc.action||"").toUpperCase()==="BUY"&&n(sc.total_score)>=85)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"INFO",type:"BUY_SIGNAL",title:`${meta.company_name||meta.symbol||"Holding"} is a strong candidate`,message:`AI score is ${n(sc.total_score).toFixed(1)} with a BUY action.`,dedupe_key:`BUY_SIGNAL:${x.instrument_id}:${Math.floor(n(sc.total_score))}`});
-   if(pnl<=-15)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:pnl<=-25?"CRITICAL":"WARNING",type:"DRAWDOWN",title:`${meta.company_name||meta.symbol||"Holding"} is in drawdown`,message:`Current unrealized loss is ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN:${x.instrument_id}:${Math.floor(pnl/5)}`});
+  for(const x of holdings){
+   const meta=im.get(x.instrument_id)||{}; const sc=sm.get(x.instrument_id)||{}; const history=scoreHistory.get(x.instrument_id)||[]; const prior=history[1]||null;
+   const b=sc.score_breakdown||{}; const freshness=b.freshness||{}; const priorFreshness=(prior?.score_breakdown||{}).freshness||{};
+   const weight=total>0?n(x.current_value)/total*100:0; const pnl=n(x.pnl_percentage); const name=meta.company_name||meta.symbol||"Holding";
+   const currentAction=up(sc.action); const priorAction=up(prior?.action); const currentRisk=up(sc.risk_level); const priorRisk=up(prior?.risk_level);
+   const currentFresh=up(freshness.status); const priorFresh=up(priorFreshness.status);
+
+   // Baseline alerts are deliberately limited to conditions that need attention now.
+   // Routine WATCH/HOLD/REDUCE states do not create alerts on every scan.
+   if(weight>=15)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"CONCENTRATION",title:`${name} is oversized`,message:`Portfolio weight is ${weight.toFixed(1)}%, above the 15% concentration guardrail.`,dedupe_key:`CONCENTRATION:${x.instrument_id}:15`});
+   if(currentRisk==="CRITICAL")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"CRITICAL_RISK",title:`${name} has critical risk`,message:`AI risk classification is CRITICAL with score ${sc.total_score??"—"}.`,dedupe_key:`CRITICAL_RISK:${x.instrument_id}`});
+   if(currentAction==="EXIT")alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"EXIT_SIGNAL",title:`Review ${name} for exit`,message:`Decision Engine is currently flagging EXIT.`,dedupe_key:`EXIT_SIGNAL:${x.instrument_id}`});
+   if(pnl<=-25)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"DRAWDOWN",title:`${name} has severe drawdown`,message:`Current unrealized loss is ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN:${x.instrument_id}:25`});
+
+   // Change-based alerts are the normal path after a baseline exists.
    if(prior){
-    const currentScore=n(sc.total_score); const priorScore=n(prior.total_score); const delta=currentScore-priorScore; const name=meta.company_name||meta.symbol||"Holding";
-    if(Math.abs(delta)>=5){const improving=delta>0; const magnitude=Math.abs(delta); alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:improving?"INFO":magnitude>=10?"CRITICAL":"WARNING",type:improving?"SCORE_IMPROVEMENT":"SCORE_DROP",title:`${name} AI score ${improving?"improved":"fell"}`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta>0?"+":""}${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_CHANGE:${x.instrument_id}:${priorScore.toFixed(1)}:${currentScore.toFixed(1)}`});}
-    const priorRisk=String(prior.risk_level||"").toUpperCase(); const currentRisk=String(sc.risk_level||"").toUpperCase();
-    if(priorRisk&&currentRisk&&priorRisk!==currentRisk){const worsened=["HIGH","CRITICAL"].includes(currentRisk)&&!["HIGH","CRITICAL"].includes(priorRisk);alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:worsened?"CRITICAL":"WARNING",type:"RISK_CHANGE",title:`${name} risk changed ${priorRisk} → ${currentRisk}`,message:`AI risk classification moved from ${priorRisk} to ${currentRisk} since the previous scan.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${currentRisk}`});}
-    const priorAction=String(prior.action||"").toUpperCase(); const currentAction=String(sc.action||"").toUpperCase();
-    if(priorAction&&currentAction&&priorAction!==currentAction&&!["REDUCE_SIGNAL","BUY_SIGNAL"].includes(currentAction)){alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:currentAction==="REDUCE"?"WARNING":"INFO",type:"ACTION_CHANGE",title:`${name} action changed ${priorAction} → ${currentAction}`,message:`AI action moved from ${priorAction} to ${currentAction} since the previous scan.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${currentAction}`});}
+    const currentScore=n(sc.total_score); const priorScore=n(prior.total_score); const delta=currentScore-priorScore;
+    if(delta<=-10)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"SCORE_DROP",title:`${name} AI score fell sharply`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_DROP:${x.instrument_id}:${Math.floor(currentScore/5)}`});
+    else if(delta<=-5)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"SCORE_DROP",title:`${name} AI score declined`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_DROP:${x.instrument_id}:${Math.floor(currentScore/5)}`});
+
+    if(currentRisk!==priorRisk&&currentRisk){
+     const worsened=["HIGH","CRITICAL"].includes(currentRisk)&&!["HIGH","CRITICAL"].includes(priorRisk);
+     const improved=["LOW","MODERATE"].includes(currentRisk)&&["HIGH","CRITICAL"].includes(priorRisk);
+     if(worsened)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:currentRisk==="CRITICAL"?"CRITICAL":"WARNING",type:"RISK_CHANGE",title:`${name} risk worsened`,message:`AI risk classification moved from ${priorRisk||"UNKNOWN"} to ${currentRisk}.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${currentRisk}`});
+     else if(improved)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"INFO",type:"RISK_IMPROVEMENT",title:`${name} risk improved`,message:`AI risk classification moved from ${priorRisk} to ${currentRisk}.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${currentRisk}`});
+    }
+
+    if(currentAction!==priorAction&&currentAction){
+     const urgent=["EXIT","REDUCE"].includes(currentAction);
+     const positive=["BUY","ACCUMULATE"].includes(currentAction);
+     alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:urgent?(currentAction==="EXIT"?"CRITICAL":"WARNING"):"INFO",type:"ACTION_CHANGE",title:`${name} action changed`,message:`AI action moved from ${priorAction||"UNKNOWN"} to ${currentAction}.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${currentAction}`});
+    }
+
+    if(currentFresh!==priorFresh&&["STALE","VERY_STALE","MISSING"].includes(currentFresh))alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"STALE_DATA",title:`${name} data became stale`,message:`Fundamental freshness changed from ${priorFresh||"UNKNOWN"} to ${currentFresh}.`,dedupe_key:`STALE_DATA_CHANGE:${x.instrument_id}:${priorFresh}:${currentFresh}`});
+
+    const crossed15=pnl<=-15 && n(prior?.pnl_percentage)>-15; const crossed25=pnl<=-25 && n(prior?.pnl_percentage)>-25;
+    if(crossed15&&!crossed25)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"DRAWDOWN",title:`${name} entered drawdown`,message:`Unrealized loss crossed -15% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:15`});
+    if(crossed25)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"DRAWDOWN",title:`${name} entered severe drawdown`,message:`Unrealized loss crossed -25% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:25`});
+
+    const priorWeight=total>0?n(x.current_value)/total*100:0;
+    if(weight>=10&&priorWeight<10)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:weight>=15?"CRITICAL":"WARNING",type:"CONCENTRATION",title:`${name} became concentrated`,message:`Portfolio weight crossed 10% and is now ${weight.toFixed(1)}%.`,dedupe_key:`CONCENTRATION_CROSS:${x.instrument_id}:10`});
    }
    const sector=meta.sector||"OTHER"; sectorMap.set(sector,(sectorMap.get(sector)||0)+n(x.current_value));
   }
-  for(const [sector,value] of sectorMap){const weight=total>0?value/total*100:0;if(weight>=30)alerts.push({user_id:userId,instrument_id:null,severity:weight>=40?"CRITICAL":"WARNING",type:"SECTOR_CONCENTRATION",title:`${sector} exposure is high`,message:`Sector exposure is ${weight.toFixed(1)}% of the portfolio.`,dedupe_key:`SECTOR_CONCENTRATION:${sector}:${Math.floor(weight)}`});}
-  if(regime&&previous&&regime.regime!==previous.regime)alerts.push({user_id:userId,instrument_id:null,severity:regime.regime==="BEAR"?"CRITICAL":"WARNING",type:"REGIME_CHANGE",title:`Market regime changed to ${regime.regime}`,message:`Market regime moved from ${previous.regime} to ${regime.regime} with score ${n(regime.score).toFixed(0)}/100.`,dedupe_key:`REGIME_CHANGE:${regime.snapshot_at}:${regime.regime}`});
+  for(const [sector,value] of sectorMap){const weight=total>0?value/total*100:0;if(weight>=40)alerts.push({user_id:userId,instrument_id:null,severity:"CRITICAL",type:"SECTOR_CONCENTRATION",title:`${sector} exposure is very high`,message:`Sector exposure is ${weight.toFixed(1)}% of the portfolio.`,dedupe_key:`SECTOR_CONCENTRATION:${sector}:40`});else if(weight>=30)alerts.push({user_id:userId,instrument_id:null,severity:"WARNING",type:"SECTOR_CONCENTRATION",title:`${sector} exposure is high`,message:`Sector exposure is ${weight.toFixed(1)}% of the portfolio.`,dedupe_key:`SECTOR_CONCENTRATION:${sector}:30`});}
+  if(regime&&previous&&regime.regime!==previous.regime)alerts.push({user_id:userId,instrument_id:null,severity:regime.regime==="BEAR"?"CRITICAL":"WARNING",type:"REGIME_CHANGE",title:`Market regime changed to ${regime.regime}`,message:`Market regime moved from ${previous.regime} to ${regime.regime} with score ${n(regime.score).toFixed(0)}/100.`,dedupe_key:`REGIME_CHANGE:${previous.regime}:${regime.regime}`});
  }
  return alerts;
 }
 
 async function persistAlerts(generated){
  if(!generated.length)return {persisted:0,warning:null};
- const deduped=[...new Map(generated.map(x=>[`${x.user_id}|${x.dedupe_key}`,x])).values()];
- const users=[...new Set(deduped.map(x=>x.user_id))];
- const existingKeys=new Set();
- for(const userId of users){
-  const keys=deduped.filter(x=>x.user_id===userId).map(x=>x.dedupe_key).filter(Boolean);
-  for(let offset=0;offset<keys.length;offset+=500){
-   const chunk=keys.slice(offset,offset+500);
-   const {data,error}=await admin.from("portfolio_alerts").select("dedupe_key").eq("user_id",userId).in("dedupe_key",chunk);
-   if(error)return {persisted:0,warning:`Alert lookup failed: ${error.message}`};
-   for(const row of data||[])if(row.dedupe_key)existingKeys.add(`${userId}|${row.dedupe_key}`);
-  }
- }
- const fresh=deduped.filter(x=>!existingKeys.has(`${x.user_id}|${x.dedupe_key}`));
- if(!fresh.length)return {persisted:0,warning:null};
- const {error}=await admin.from("portfolio_alerts").insert(fresh);
- if(!error)return {persisted:fresh.length,warning:null};
- // A duplicate can race another scan. Retry individually so one conflict does not kill the whole scan.
- let persisted=0; let lastError=error.message;
- for(const alert of fresh){
-  const result=await admin.from("portfolio_alerts").insert(alert);
-  if(!result.error){persisted++;continue;}
-  if(result.error.code==="23505")continue;
-  lastError=result.error.message;
- }
- return {persisted,warning:persisted?`Some alerts could not be saved: ${lastError}`:`Alert persistence failed: ${lastError}`};
+ const deduped=[...new Map(generated.map(x=>[`${x.user_id}|${x.dedupe_key}`,x])).values()]; const users=[...new Set(deduped.map(x=>x.user_id))]; const existingKeys=new Set();
+ for(const userId of users){const keys=deduped.filter(x=>x.user_id===userId).map(x=>x.dedupe_key).filter(Boolean);for(let offset=0;offset<keys.length;offset+=500){const chunk=keys.slice(offset,offset+500);const {data,error}=await admin.from("portfolio_alerts").select("dedupe_key").eq("user_id",userId).in("dedupe_key",chunk);if(error)return {persisted:0,warning:`Alert lookup failed: ${error.message}`};for(const row of data||[])if(row.dedupe_key)existingKeys.add(`${userId}|${row.dedupe_key}`);}}
+ const fresh=deduped.filter(x=>!existingKeys.has(`${x.user_id}|${x.dedupe_key}`)); if(!fresh.length)return {persisted:0,warning:null};
+ const {error}=await admin.from("portfolio_alerts").insert(fresh); if(!error)return {persisted:fresh.length,warning:null};
+ let persisted=0; let lastError=error.message; for(const alert of fresh){const result=await admin.from("portfolio_alerts").insert(alert);if(!result.error){persisted++;continue;}if(result.error.code==="23505")continue;lastError=result.error.message;} return {persisted,warning:persisted?`Some alerts could not be saved: ${lastError}`:`Alert persistence failed: ${lastError}`};
 }
 
 export async function GET(request){
  try{
   const auth=request.headers.get("authorization")||""; const token=auth.replace(/^Bearer\s+/i,"").trim();
-  if(pipelineAuth(request)){
-   const generated=await generateForAllUsers();
-   const result=await persistAlerts(generated);
-   return NextResponse.json({success:true,engine_version:ENGINE_VERSION,mode:"pipeline",generated:generated.length,persisted:result.persisted,warning:result.warning});
-  }
+  if(pipelineAuth(request)){const generated=await generateForAllUsers();const result=await persistAlerts(generated);return NextResponse.json({success:true,engine_version:ENGINE_VERSION,mode:"pipeline",generated:generated.length,persisted:result.persisted,warning:result.warning});}
   if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});
-  const supabase=userClient(token); const {data:userResult,error:userError}=await supabase.auth.getUser(token);
-  if(userError||!userResult?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});
-  const {data,error}=await supabase.from("portfolio_alerts").select("id,instrument_id,severity,type,title,message,is_read,created_at").eq("user_id",userResult.user.id).order("created_at",{ascending:false}).limit(100);
-  if(error)throw new Error(error.message);
+  const supabase=userClient(token); const {data:userResult,error:userError}=await supabase.auth.getUser(token); if(userError||!userResult?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});
+  const {data,error}=await supabase.from("portfolio_alerts").select("id,instrument_id,severity,type,title,message,is_read,created_at").eq("user_id",userResult.user.id).order("created_at",{ascending:false}).limit(100); if(error)throw new Error(error.message);
   const alerts=data||[]; return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),summary:{alert_count:alerts.length,critical:alerts.filter(x=>x.severity==="CRITICAL").length,warning:alerts.filter(x=>x.severity==="WARNING").length,info:alerts.filter(x=>x.severity==="INFO").length,unread:alerts.filter(x=>!x.is_read).length},alerts});
  }catch(error){console.error("Portfolio alerts error",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Portfolio alerts failed."},{status:500});}
 }
