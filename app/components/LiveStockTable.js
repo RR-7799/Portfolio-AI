@@ -25,11 +25,12 @@ export default function LiveStockTable() {
   const [quotes, setQuotes] = useState(new Map());
 
   const applyToTable = useCallback(() => {
-    const heading = Array.from(document.querySelectorAll("h1, h2, h3, h4, span, div"))
-      .find((node) => normalise(node.textContent) === "STOCK HOLDINGS");
+    const heading = Array.from(
+      document.querySelectorAll("h1, h2, h3, h4, span, div")
+    ).find((node) => normalise(node.textContent) === "STOCK HOLDINGS");
+
     const section = heading?.closest("section");
     const table = section?.querySelector("table");
-
     if (!table) return false;
 
     table.style.minWidth = "980px";
@@ -38,61 +39,77 @@ export default function LiveStockTable() {
     const headRow = table.querySelector("thead tr");
     if (!headRow) return false;
 
-    let symbolHeader = Array.from(headRow.children)
-      .find((cell) => normalise(cell.textContent) === "SYMBOL");
-    if (!symbolHeader) return false;
+    const headers = Array.from(headRow.children);
+    const companyHeader = headers.find(
+      (cell) => normalise(cell.textContent) === "COMPANY"
+    );
+    const symbolHeader = headers.find(
+      (cell) => normalise(cell.textContent) === "SYMBOL"
+    );
 
-    if (!headRow.querySelector('[data-live-ltp-header="true"]')) {
-      const ltpHeader = document.createElement("th");
-      ltpHeader.textContent = "LTP";
-      ltpHeader.dataset.liveLtpHeader = "true";
-      symbolHeader.insertAdjacentElement("afterend", ltpHeader);
+    if (!companyHeader) return false;
 
-      const dayHeader = document.createElement("th");
-      dayHeader.textContent = "DAY";
-      dayHeader.dataset.liveDayHeader = "true";
-      ltpHeader.insertAdjacentElement("afterend", dayHeader);
+    // Remove Symbol completely: the requested table is
+    // Company | LTP | Broker | Qty | Invested | Value | P/L | AI
+    if (symbolHeader) {
+      const symbolIndex = headers.indexOf(symbolHeader);
+      symbolHeader.remove();
+      table.querySelectorAll("tbody tr").forEach((row) => {
+        row.children[symbolIndex]?.remove();
+      });
     }
 
-    const symbolIndex = Array.from(headRow.children).indexOf(symbolHeader);
-    const rows = Array.from(table.querySelectorAll("tbody tr"));
+    const refreshedHeaders = Array.from(headRow.children);
+    const refreshedCompanyHeader = refreshedHeaders.find(
+      (cell) => normalise(cell.textContent) === "COMPANY"
+    );
 
-    rows.forEach((row) => {
+    if (!refreshedCompanyHeader) return false;
+
+    let ltpHeader = headRow.querySelector('[data-live-ltp-header="true"]');
+    if (!ltpHeader) {
+      ltpHeader = document.createElement("th");
+      ltpHeader.textContent = "LTP";
+      ltpHeader.dataset.liveLtpHeader = "true";
+      refreshedCompanyHeader.insertAdjacentElement("afterend", ltpHeader);
+    }
+
+    const companyIndex = Array.from(headRow.children).indexOf(
+      refreshedCompanyHeader
+    );
+    const ltpIndex = companyIndex + 1;
+
+    table.querySelectorAll("tbody tr").forEach((row) => {
       const cells = Array.from(row.children);
-      const symbolCell = cells[symbolIndex];
-      if (!symbolCell) return;
+      const companyCell = cells[companyIndex];
+      if (!companyCell) return;
 
-      const symbol = normalise(symbolCell.textContent);
-      const quote = quotes.get(symbol);
-      const ltpText = quote?.lastPrice == null ? "—" : money(quote.lastPrice);
-      const dayText = quote?.changePct == null
-        ? "—"
-        : `${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%`;
+      // The quote API returns the instrument symbol (ISIN), so keep it
+      // hidden in a data attribute instead of displaying a Symbol column.
+      const symbol = normalise(
+        companyCell.getAttribute("data-instrument-symbol") ||
+          companyCell.dataset.instrumentSymbol
+      );
 
       let ltpCell = row.querySelector('[data-live-ltp-cell="true"]');
       if (!ltpCell) {
         ltpCell = document.createElement("td");
         ltpCell.dataset.liveLtpCell = "true";
         ltpCell.style.whiteSpace = "nowrap";
-        symbolCell.insertAdjacentElement("afterend", ltpCell);
+        companyCell.insertAdjacentElement("afterend", ltpCell);
       }
+
+      const quote = symbol ? quotes.get(symbol) : null;
       ltpCell.innerHTML = quote?.lastPrice == null
         ? '<span style="opacity:.55">—</span>'
-        : `<strong>${ltpText}</strong>`;
+        : `<strong>${money(quote.lastPrice)}</strong>`;
 
-      let dayCell = row.querySelector('[data-live-day-cell="true"]');
-      if (!dayCell) {
-        dayCell = document.createElement("td");
-        dayCell.dataset.liveDayCell = "true";
-        dayCell.style.whiteSpace = "nowrap";
-        ltpCell.insertAdjacentElement("afterend", dayCell);
+      // Keep the inserted cell immediately after Company even if React
+      // re-renders the table.
+      const currentIndex = Array.from(row.children).indexOf(ltpCell);
+      if (currentIndex !== ltpIndex) {
+        companyCell.insertAdjacentElement("afterend", ltpCell);
       }
-      dayCell.className = quote?.changePct == null
-        ? ""
-        : quote.changePct >= 0 ? "positive" : "negative";
-      dayCell.innerHTML = quote?.changePct == null
-        ? '<span style="opacity:.55">—</span>'
-        : dayText;
     });
 
     return true;
@@ -112,24 +129,21 @@ export default function LiveStockTable() {
 
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.success) {
-        throw new Error(body?.error || `Market quote request failed (${response.status})`);
+        throw new Error(
+          body?.error || `Market quote request failed (${response.status})`
+        );
       }
 
       const nextQuotes = new Map();
-      Object.entries(body.quotes || {}).forEach(([key, quote]) => {
-        const token = quote?.instrument_token || key.replace(/^NSE_EQ:/, "NSE_EQ|");
-        const isin = token.includes("|")
-          ? token.split("|").slice(1).join("|")
-          : token;
-        const lastPrice = Number(quote?.last_price);
-        const previousClose = Number(quote?.cp);
-        const changePct = Number.isFinite(lastPrice) && Number.isFinite(previousClose) && previousClose !== 0
-          ? ((lastPrice - previousClose) / previousClose) * 100
-          : null;
 
-        nextQuotes.set(normalise(isin), {
+      Object.values(body.quotes || {}).forEach((quote) => {
+        const isin = normalise(quote?.symbol);
+        const lastPrice = Number(quote?.last_price);
+
+        if (!isin) return;
+
+        nextQuotes.set(isin, {
           lastPrice: Number.isFinite(lastPrice) ? lastPrice : null,
-          changePct,
         });
       });
 
@@ -144,27 +158,46 @@ export default function LiveStockTable() {
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
-      setSession(data.session || null);
-      if (data.session) refresh(data.session);
+      const activeSession = data.session || null;
+      setSession(activeSession);
+      if (activeSession) refresh(activeSession);
     });
 
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [refresh]);
 
   useEffect(() => {
     if (!session) return undefined;
+
     const timer = window.setInterval(() => refresh(session), 30000);
     return () => window.clearInterval(timer);
   }, [session, refresh]);
 
   useEffect(() => {
-    applyToTable();
+    let frame = null;
 
-    const observer = new MutationObserver(() => applyToTable());
+    const scheduleApply = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        applyToTable();
+      });
+    };
+
+    scheduleApply();
+
+    const observer = new MutationObserver(scheduleApply);
     observer.observe(document.body, { childList: true, subtree: true });
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, [applyToTable]);
 
+  // React dashboard remains the source of truth for holdings.
+  // This component only decorates the existing table with live LTP.
   return null;
 }
