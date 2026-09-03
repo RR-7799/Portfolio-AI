@@ -29,7 +29,6 @@ export default function RunScanButton() {
       }
     );
 
-    // Keep the completed-scan result visible after the dashboard reloads.
     try {
       const saved = window.sessionStorage.getItem(SCAN_RESULT_KEY);
       if (saved && mounted) {
@@ -99,7 +98,11 @@ export default function RunScanButton() {
       if (!response.ok || !body?.success) {
         const pipeline = body?.pipeline || {};
         const failedStage = pipeline?.failed_stage || body?.failed_stage;
-        const detail = body?.error || body?.message || `HTTP ${response.status}`;
+        const stageResult = Array.isArray(pipeline?.stages)
+          ? pipeline.stages.find((item) => item?.stage === failedStage)
+          : null;
+        const stageDetail = stageResult?.data?.error || stageResult?.data?.message || "";
+        const detail = stageDetail || body?.error || body?.message || `HTTP ${response.status}`;
         const stageText = failedStage ? ` [stage: ${failedStage}]` : "";
         throw new Error(`${detail}${stageText}`);
       }
@@ -118,8 +121,6 @@ export default function RunScanButton() {
       const completedMessage =
         `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts${coverageText} · decisions synced`;
 
-      // Persist the result before reloading so the user sees it on the fresh
-      // dashboard instead of losing it during navigation.
       try {
         window.sessionStorage.setItem(
           SCAN_RESULT_KEY,
@@ -131,9 +132,6 @@ export default function RunScanButton() {
 
       setMessage(completedMessage);
       window.dispatchEvent(new CustomEvent("portfolio-scan-complete"));
-
-      // Reload immediately so all dashboard data reflects the completed scan.
-      // The completion notification is restored from sessionStorage after reload.
       window.setTimeout(() => window.location.reload(), 250);
     } catch (scanError) {
       console.error("Portfolio scan error:", scanError);
@@ -207,7 +205,11 @@ export default function RunScanButton() {
       {error ? (
         <span
           className="error"
-          style={{ margin: 0, whiteSpace: "nowrap" }}
+          style={{
+            margin: 0,
+            maxWidth: "min(720px, calc(100vw - 32px))",
+            whiteSpace: "normal",
+          }}
         >
           {error}
         </span>
