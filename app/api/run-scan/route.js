@@ -5,7 +5,7 @@ import { GET as runDecisionEngine } from "../decision-engine/route";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "run_scan_v1_1";
+const ENGINE_VERSION = "run_scan_v1_2";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -18,6 +18,51 @@ async function parseJsonResponse(response) {
   } catch {
     return { success: false, error: `HTTP ${response.status}` };
   }
+}
+
+async function getCoverage(userId) {
+  const [{ data: holdings, error: holdingsError }, { data: scores, error: scoresError }, { data: instruments, error: instrumentsError }] = await Promise.all([
+    supabase.from("holdings").select("instrument_id,current_value").eq("user_id", userId),
+    supabase.from("ai_scores").select("instrument_id,total_score").eq("user_id", userId),
+    supabase.from("instruments").select("id,company_name,symbol,sector"),
+  ]);
+
+  if (holdingsError) throw new Error(`Coverage holdings query failed: ${holdingsError.message}`);
+  if (scoresError) throw new Error(`Coverage scores query failed: ${scoresError.message}`);
+  if (instrumentsError) throw new Error(`Coverage instruments query failed: ${instrumentsError.message}`);
+
+  const instrumentMap = new Map((instruments || []).map((item) => [item.id, item]));
+  const scoreMap = new Map((scores || []).map((item) => [item.instrument_id, item]));
+  const uniqueHoldingIds = [...new Set((holdings || []).map((item) => item.instrument_id).filter(Boolean))];
+  const scoredIds = new Set(
+    (scores || [])
+      .filter((item) => item.total_score !== null && item.total_score !== undefined)
+      .map((item) => item.instrument_id)
+  );
+
+  const missing = uniqueHoldingIds
+    .filter((id) => !scoredIds.has(id))
+    .map((id) => {
+      const score = scoreMap.get(id);
+      const meta = instrumentMap.get(id) || {};
+      return {
+        instrument_id: id,
+        company_name: meta.company_name || meta.symbol || "Unknown holding",
+        symbol: meta.symbol || null,
+        sector: meta.sector || "OTHER",
+        status: score ? "NULL_SCORE" : "NO_AI_SCORE",
+      };
+    });
+
+  return {
+    total_positions: uniqueHoldingIds.length,
+    scored_positions: uniqueHoldingIds.filter((id) => scoredIds.has(id)).length,
+    unscored_positions: missing.length,
+    coverage_pct: uniqueHoldingIds.length
+      ? Number((scoredIds.size >= uniqueHoldingIds.length ? 100 : (uniqueHoldingIds.filter((id) => scoredIds.has(id)).length / uniqueHoldingIds.length) * 100).toFixed(1))
+      : 100,
+    missing,
+  };
 }
 
 export async function POST(request) {
@@ -88,7 +133,7 @@ export async function POST(request) {
         {
           success: false,
           engine_version: ENGINE_VERSION,
-          failed_stage: "decision_engine_v2",
+          failed_stage: "decision_engine_v3",
           error: decisionPayload?.error || "Decision engine failed after scan.",
           pipeline: pipelinePayload,
           decision_engine: decisionPayload,
@@ -96,6 +141,8 @@ export async function POST(request) {
         { status: decisionResponse.status || 502 }
       );
     }
+
+    const coverage = await getCoverage(data.user.id);
 
     return NextResponse.json({
       success: true,
@@ -107,6 +154,7 @@ export async function POST(request) {
         decision_engine_completed: true,
         decision_engine_version: decisionPayload.engine_version || null,
         decision_counts: decisionPayload.decision_counts || {},
+        coverage,
       },
       decision_engine: {
         engine_version: decisionPayload.engine_version || null,
