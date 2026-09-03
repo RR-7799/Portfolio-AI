@@ -8,6 +8,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
+const SCAN_RESULT_KEY = "portfolio-ai:last-scan-result";
+
 export default function RunScanButton() {
   const [session, setSession] = useState(null);
   const [running, setRunning] = useState(false);
@@ -27,11 +29,31 @@ export default function RunScanButton() {
       }
     );
 
+    // Keep the completed-scan result visible after the dashboard reloads.
+    try {
+      const saved = window.sessionStorage.getItem(SCAN_RESULT_KEY);
+      if (saved && mounted) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.message) setMessage(parsed.message);
+      }
+    } catch (storageError) {
+      console.warn("Unable to restore scan result:", storageError);
+    }
+
     return () => {
       mounted = false;
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  function dismissMessage() {
+    setMessage("");
+    try {
+      window.sessionStorage.removeItem(SCAN_RESULT_KEY);
+    } catch (storageError) {
+      console.warn("Unable to clear scan result:", storageError);
+    }
+  }
 
   async function runScan() {
     if (running) return;
@@ -86,17 +108,26 @@ export default function RunScanButton() {
       const generated = Number(summary.alerts_generated || 0);
       const scored = summary.scored == null ? "—" : summary.scored;
       const buys = summary.buy_candidates == null ? "—" : summary.buy_candidates;
+      const completedMessage =
+        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts · decisions synced`;
 
-      setMessage(
-        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts · decisions synced`
-      );
+      // Persist the result before reloading so the user sees it on the fresh
+      // dashboard instead of losing it during navigation.
+      try {
+        window.sessionStorage.setItem(
+          SCAN_RESULT_KEY,
+          JSON.stringify({ message: completedMessage, savedAt: Date.now() })
+        );
+      } catch (storageError) {
+        console.warn("Unable to persist scan result:", storageError);
+      }
 
+      setMessage(completedMessage);
       window.dispatchEvent(new CustomEvent("portfolio-scan-complete"));
 
-      // Keep the completion message visible long enough to be seen/read.
-      // The dashboard reads the latest ai_scores directly, so reload after the
-      // message has been visible rather than immediately replacing the screen.
-      window.setTimeout(() => window.location.reload(), 3000);
+      // Reload immediately so all dashboard data reflects the completed scan.
+      // The completion notification is restored from sessionStorage after reload.
+      window.setTimeout(() => window.location.reload(), 250);
     } catch (scanError) {
       console.error("Portfolio scan error:", scanError);
       setError(scanError?.message || "Portfolio scan failed.");
@@ -142,9 +173,27 @@ export default function RunScanButton() {
             padding: "8px 12px",
             background: "white",
             whiteSpace: "nowrap",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 10,
           }}
         >
           {message}
+          <button
+            type="button"
+            onClick={dismissMessage}
+            aria-label="Dismiss scan result"
+            style={{
+              border: 0,
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+              padding: 2,
+            }}
+          >
+            ×
+          </button>
         </span>
       ) : null}
 
