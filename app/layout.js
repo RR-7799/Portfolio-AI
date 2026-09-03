@@ -1,6 +1,6 @@
 import "./globals.css";
 import RunScanButton from "./components/RunScanButton";
-import PositionIntelligence from "./components/PositionIntelligence";
+import PortfolioIntelligenceGate from "./components/PortfolioIntelligenceGate";
 
 export const metadata = { title: "Portfolio AI", description: "Personal portfolio tracker" };
 
@@ -10,7 +10,7 @@ export default function RootLayout({ children }) {
       <body>
         {children}
         <RunScanButton />
-        <PositionIntelligence />
+        <PortfolioIntelligenceGate />
       </body>
     </html>
   );
