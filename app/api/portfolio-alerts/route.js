@@ -27,7 +27,7 @@ async function generateForAllUsers(){
  }
  const sm=new Map([...scoreHistory].map(([id,list])=>[id,list[0]]));
  const users=[...new Set((h.data||[]).map(x=>x.user_id).filter(Boolean))];
- const regime=m.data?.[0]||null; const previous= m.data?.[1]||null; const alerts=[];
+ const regime=m.data?.[0]||null; const previous=m.data?.[1]||null; const alerts=[];
  for(const userId of users){
   const holdings=(h.data||[]).filter(x=>x.user_id===userId); const total=holdings.reduce((a,x)=>a+n(x.current_value),0); const sectorMap=new Map();
   for(const x of holdings){
@@ -59,7 +59,6 @@ async function generateForAllUsers(){
 
     if(currentAction!==priorAction&&currentAction){
      const urgent=["EXIT","REDUCE"].includes(currentAction);
-     const positive=["BUY","ACCUMULATE"].includes(currentAction);
      alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:urgent?(currentAction==="EXIT"?"CRITICAL":"WARNING"):"INFO",type:"ACTION_CHANGE",title:`${name} action changed`,message:`AI action moved from ${priorAction||"UNKNOWN"} to ${currentAction}.`,dedupe_key:`ACTION_CHANGE:${x.instrument_id}:${priorAction}:${currentAction}`});
     }
 
@@ -68,9 +67,6 @@ async function generateForAllUsers(){
     const crossed15=pnl<=-15 && n(prior?.pnl_percentage)>-15; const crossed25=pnl<=-25 && n(prior?.pnl_percentage)>-25;
     if(crossed15&&!crossed25)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"WARNING",type:"DRAWDOWN",title:`${name} entered drawdown`,message:`Unrealized loss crossed -15% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:15`});
     if(crossed25)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:"CRITICAL",type:"DRAWDOWN",title:`${name} entered severe drawdown`,message:`Unrealized loss crossed -25% and is now ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN_CROSS:${x.instrument_id}:25`});
-
-    const priorWeight=total>0?n(x.current_value)/total*100:0;
-    if(weight>=10&&priorWeight<10)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:weight>=15?"CRITICAL":"WARNING",type:"CONCENTRATION",title:`${name} became concentrated`,message:`Portfolio weight crossed 10% and is now ${weight.toFixed(1)}%.`,dedupe_key:`CONCENTRATION_CROSS:${x.instrument_id}:10`});
    }
    const sector=meta.sector||"OTHER"; sectorMap.set(sector,(sectorMap.get(sector)||0)+n(x.current_value));
   }
