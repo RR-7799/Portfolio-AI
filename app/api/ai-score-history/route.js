@@ -1,0 +1,7 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+export const dynamic="force-dynamic";
+const ENGINE_VERSION="ai_score_history_v1_0";
+const supabase=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY);
+function auth(request){const s=process.env.PIPELINE_SECRET||"";return s&&(request.headers.get("x-pipeline-secret")===s||request.headers.get("authorization")===`Bearer ${s}`);}
+export async function GET(request){if(!auth(request))return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Unauthorized"},{status:401});try{const{data:scores,error}=await supabase.from("ai_scores").select("user_id,instrument_id,long_term_score,short_term_score,risk_score,valuation_score,final_ai_score,total_score,confidence,data_completeness,freshness_status,score_version,score_breakdown,calculated_at,calculation_metadata");if(error)throw error;const now=new Date().toISOString();const rows=(scores||[]).filter(x=>x.user_id&&x.instrument_id).map(x=>({...x,calculated_at:x.calculated_at||now}));for(let i=0;i<rows.length;i+=100){const{error:e}=await supabase.from("ai_score_history").insert(rows.slice(i,i+100));if(e)throw e;}return NextResponse.json({success:true,engine_version:ENGINE_VERSION,stored:rows.length,stored_at:now});}catch(error){return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Score history failed."},{status:500});}}
