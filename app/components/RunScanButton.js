@@ -93,9 +93,10 @@ export default function RunScanButton() {
 
       window.dispatchEvent(new CustomEvent("portfolio-scan-complete"));
 
-      // The dashboard reads the latest ai_scores directly. Reload so its visible
-      // action column immediately reflects Decision Engine V2's final decisions.
-      window.setTimeout(() => window.location.reload(), 500);
+      // Keep the completion message visible long enough to be seen/read.
+      // The dashboard reads the latest ai_scores directly, so reload after the
+      // message has been visible rather than immediately replacing the screen.
+      window.setTimeout(() => window.location.reload(), 3000);
     } catch (scanError) {
       console.error("Portfolio scan error:", scanError);
       setError(scanError?.message || "Portfolio scan failed.");
