@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "decision_engine_v2_2";
+const ENGINE_VERSION = "decision_engine_v2_3";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 function userClient(token) { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } }); }
@@ -21,19 +21,10 @@ function pct(value, max) {
 function decisionV2(input){
   const {score,risk,weight,pnl,freshness,regime,modelAction,growth,profitability,debt,ownership,cashflow,valuation,riskScore}=input;
   const s=n(score) ?? 0, r=String(risk||"").toUpperCase(), f=String(freshness||"").toUpperCase(), m=String(regime||"").toUpperCase();
-
-  const growthP=pct(growth,20);
-  const profitP=pct(profitability,20);
-  const debtP=pct(debt,10);
-  const ownershipP=pct(ownership,10);
-  const cashP=pct(cashflow,10);
-  const valuationP=pct(valuation,15);
-  const riskP=pct(riskScore,15);
-
+  const growthP=pct(growth,20), profitP=pct(profitability,20), debtP=pct(debt,10), ownershipP=pct(ownership,10), cashP=pct(cashflow,10), valuationP=pct(valuation,15), riskP=pct(riskScore,15);
   const thesis=clamp(avg([growthP,profitP,debtP,cashP],s));
   const quality=clamp(avg([profitP,debtP,cashP,ownershipP],s));
   const opportunity=clamp(avg([s,growthP,valuationP,riskP],s));
-
   const valuationWeak=valuationP!==null && valuationP<35;
   const strongThesis=thesis>=68 && quality>=60;
   const brokenThesis=thesis<42 && quality<48;
@@ -67,13 +58,13 @@ function decisionV2(input){
     quality_score:Math.round(quality*10)/10,
     opportunity_score:Math.round(opportunity*10)/10,
     normalized_components:{
-      growth: growthP===null?null:Math.round(growthP*10)/10,
-      profitability: profitP===null?null:Math.round(profitP*10)/10,
-      debt: debtP===null?null:Math.round(debtP*10)/10,
-      ownership: ownershipP===null?null:Math.round(ownershipP*10)/10,
-      cashflow: cashP===null?null:Math.round(cashP*10)/10,
-      valuation: valuationP===null?null:Math.round(valuationP*10)/10,
-      risk: riskP===null?null:Math.round(riskP*10)/10,
+      growth:growthP===null?null:Math.round(growthP*10)/10,
+      profitability:profitP===null?null:Math.round(profitP*10)/10,
+      debt:debtP===null?null:Math.round(debtP*10)/10,
+      ownership:ownershipP===null?null:Math.round(ownershipP*10)/10,
+      cashflow:cashP===null?null:Math.round(cashP*10)/10,
+      valuation:valuationP===null?null:Math.round(valuationP*10)/10,
+      risk:riskP===null?null:Math.round(riskP*10)/10
     },
     signals:{strong_thesis:strongThesis,broken_thesis:brokenThesis,critical_risk:criticalRisk,high_risk:highRisk,overweight,severe_drawdown:severeDrawdown,valuation_weak:valuationWeak,stale_data:stale}
   }];
@@ -95,8 +86,19 @@ async function buildForUser(client,userId){
     const [action,reason,confidence,diagnostics]=decisionV2({score:score.total_score,risk:score.risk_level,weight,pnl,freshness,regime,modelAction:score.action,growth:score.growth_score,profitability:score.profitability_score,debt:score.debt_score,ownership:score.ownership_score,cashflow:score.cashflow_score,valuation:score.valuation_score,riskScore:score.risk_score});
     return {instrument_id:holding.instrument_id,company_name:meta.company_name||meta.symbol||"Holding",symbol:meta.symbol||null,sector:meta.sector||null,portfolio_weight_pct:Number(weight.toFixed(2)),pnl_pct:Number((n(pnl)||0).toFixed(2)),ai_score:score.total_score??null,risk_level:score.risk_level||null,rating:score.rating||null,model_action:score.action||null,freshness_status:freshness,growth_score:score.growth_score??null,profitability_score:score.profitability_score??null,debt_score:score.debt_score??null,ownership_score:score.ownership_score??null,cashflow_score:score.cashflow_score??null,valuation_score:score.valuation_score??null,risk_score:score.risk_score??null,decision:action,confidence,reason,market_regime:regime,...diagnostics};
   });
-  const rank={EXIT:0,REDUCE:1,"HOLD & TRIM":2,WATCH:3,HOLD:4,ACCUMULATE:5,BUY:6};results.sort((a,b)=>rank[a.decision]-rank[b.decision]||(b.confidence-a.confidence));
+  const rank={EXIT:0,REDUCE:1,"HOLD & TRIM":2,WATCH:3,HOLD:4,ACCUMULATE:5,BUY:6};results.sort((a,b)=>(rank[a.decision]??99)-(rank[b.decision]??99)||(b.confidence-a.confidence));
   return{user_id:userId,market_regime:regime,portfolio_value:total,decisions:results};
+}
+
+async function persistFinalActions(decisions,userId) {
+  let updated=0;
+  for(const item of decisions||[]) {
+    if(!item.instrument_id||!item.decision) continue;
+    const {error}=await admin.from("ai_scores").update({action:item.decision,updated_at:new Date().toISOString()}).eq("instrument_id",item.instrument_id).eq("user_id",userId);
+    if(error) throw new Error(`Decision persistence failed for ${item.company_name||item.instrument_id}: ${error.message}`);
+    updated++;
+  }
+  return updated;
 }
 
 export async function GET(request){
@@ -105,9 +107,11 @@ export async function GET(request){
     if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});
     const client=userClient(token),{data:userResult,error:userError}=await client.auth.getUser(token);
     if(userError||!userResult?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});
-    const portfolio=await buildForUser(client,userResult.user.id);
+    const userId=userResult.user.id;
+    const portfolio=await buildForUser(client,userId);
+    const persisted=await persistFinalActions(portfolio.decisions,userId);
     const counts={};for(const x of portfolio.decisions)counts[x.decision]=(counts[x.decision]||0)+1;
-    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts:counts});
+    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts:counts,persisted_actions:persisted});
   }catch(error){
     console.error("Decision engine V2 error:",error);
     return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});
