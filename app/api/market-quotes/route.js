@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
-const ENGINE_VERSION = "market_quotes_v1_0";
+const ENGINE_VERSION = "market_quotes_v1_1";
 const UPSTOX_URL = "https://api.upstox.com/v3/market-quote/ltp";
 
 function userClient(token) {
@@ -14,10 +14,19 @@ function userClient(token) {
   );
 }
 
-function instrumentKey(id) {
-  const value = String(id || "").trim();
-  if (!value) return null;
-  return value.includes("|") ? value : `NSE_EQ|${value}`;
+function isNseEquityIsin(value) {
+  return /^INE[A-Z0-9]{9,12}$/i.test(String(value || "").trim());
+}
+
+function instrumentKey(instrument) {
+  const rawKey = String(instrument?.instrument_key || "").trim();
+  if (rawKey.includes("|")) return rawKey;
+
+  const symbol = String(instrument?.symbol || "").trim();
+  if (symbol.includes("|")) return symbol;
+  if (isNseEquityIsin(symbol)) return `NSE_EQ|${symbol}`;
+
+  return null;
 }
 
 export async function GET(request) {
@@ -29,6 +38,14 @@ export async function GET(request) {
       return NextResponse.json(
         { success: false, engine_version: ENGINE_VERSION, error: "Authentication required." },
         { status: 401 }
+      );
+    }
+
+    const upstoxToken = process.env.UPSTOX_ANALYTICS_TOKEN;
+    if (!upstoxToken) {
+      return NextResponse.json(
+        { success: false, engine_version: ENGINE_VERSION, error: "UPSTOX_ANALYTICS_TOKEN is not configured on the server." },
+        { status: 500 }
       );
     }
 
@@ -49,32 +66,52 @@ export async function GET(request) {
 
     if (holdingsError) throw new Error(holdingsError.message);
 
-    const instrumentIds = [...new Set((holdings || []).map((x) => x.instrument_id).filter(Boolean))];
-    const keys = instrumentIds.map(instrumentKey).filter(Boolean);
+    const ids = [...new Set((holdings || []).map((row) => row.instrument_id).filter(Boolean))];
 
-    if (!keys.length) {
+    if (!ids.length) {
       return NextResponse.json({
         success: true,
         engine_version: ENGINE_VERSION,
         quotes: {},
         count: 0,
+        requested: 0,
+        skipped: 0,
+        errors: [],
         fetched_at: new Date().toISOString(),
       });
     }
 
-    // Upstox supports up to 500 instrument keys per request.
+    // holdings.instrument_id is the internal Supabase instrument id.
+    // The Upstox key must come from the instrument record (symbol is stored as the ISIN here).
+    const { data: instruments, error: instrumentsError } = await client
+      .from("instruments")
+      .select("id,symbol,company_name")
+      .in("id", ids);
+
+    if (instrumentsError) throw new Error(instrumentsError.message);
+
+    const instrumentById = new Map((instruments || []).map((row) => [String(row.id), row]));
+    const quoteTargets = ids
+      .map((id) => {
+        const instrument = instrumentById.get(String(id));
+        return { id: String(id), instrument, key: instrumentKey(instrument) };
+      })
+      .filter((row) => row.key);
+
+    const skipped = ids.length - quoteTargets.length;
     const quotes = {};
     const errors = [];
 
-    for (let offset = 0; offset < keys.length; offset += 500) {
-      const batch = keys.slice(offset, offset + 500);
-      const url = `${UPSTOX_URL}?instrument_key=${encodeURIComponent(batch.join(","))}`;
+    // Upstox supports up to 500 instrument keys per request.
+    for (let offset = 0; offset < quoteTargets.length; offset += 500) {
+      const batch = quoteTargets.slice(offset, offset + 500);
+      const url = `${UPSTOX_URL}?instrument_key=${encodeURIComponent(batch.map((row) => row.key).join(","))}`;
 
       const response = await fetch(url, {
         method: "GET",
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${process.env.UPSTOX_ANALYTICS_TOKEN}`,
+          Authorization: `Bearer ${upstoxToken}`,
         },
         cache: "no-store",
       });
@@ -86,18 +123,43 @@ export async function GET(request) {
         continue;
       }
 
-      Object.assign(quotes, body?.data || {});
+      const returned = body?.data || {};
+      const targetsByKey = new Map(batch.map((row) => [row.key, row]));
+
+      for (const [responseKey, quote] of Object.entries(returned)) {
+        const tokenKey = String(quote?.instrument_token || responseKey).replace(/:/g, "|");
+        const target = targetsByKey.get(tokenKey) || batch.find((row) => row.key === responseKey);
+        if (!target) continue;
+
+        const lastPrice = Number(quote?.last_price);
+        const previousClose = Number(quote?.cp);
+        quotes[target.id] = {
+          instrument_id: target.id,
+          symbol: target.instrument?.symbol || null,
+          company_name: target.instrument?.company_name || null,
+          last_price: Number.isFinite(lastPrice) ? lastPrice : null,
+          previous_close: Number.isFinite(previousClose) ? previousClose : null,
+          change: Number.isFinite(lastPrice) && Number.isFinite(previousClose) ? lastPrice - previousClose : null,
+          change_pct: Number.isFinite(lastPrice) && Number.isFinite(previousClose) && previousClose !== 0
+            ? ((lastPrice - previousClose) / previousClose) * 100
+            : null,
+          instrument_key: target.key,
+        };
+      }
     }
 
+    const count = Object.keys(quotes).length;
+
     return NextResponse.json({
-      success: true,
+      success: errors.length === 0,
       engine_version: ENGINE_VERSION,
       quotes,
-      count: Object.keys(quotes).length,
-      requested: keys.length,
+      count,
+      requested: quoteTargets.length,
+      skipped,
       errors,
       fetched_at: new Date().toISOString(),
-    });
+    }, { status: errors.length && count === 0 ? 502 : 200 });
   } catch (error) {
     console.error("Market quotes error:", error);
     return NextResponse.json(
