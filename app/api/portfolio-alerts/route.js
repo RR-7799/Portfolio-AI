@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_alerts_v1_2";
+const ENGINE_VERSION = "portfolio_alerts_v1_3";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 function userClient(token){return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});}
@@ -37,8 +37,7 @@ async function generateForAllUsers(){
    if(pnl<=-15)alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:pnl<=-25?"CRITICAL":"WARNING",type:"DRAWDOWN",title:`${meta.company_name||meta.symbol||"Holding"} is in drawdown`,message:`Current unrealized loss is ${pnl.toFixed(1)}%.`,dedupe_key:`DRAWDOWN:${x.instrument_id}:${Math.floor(pnl/5)}`});
    if(prior){
     const currentScore=n(sc.total_score); const priorScore=n(prior.total_score); const delta=currentScore-priorScore; const name=meta.company_name||meta.symbol||"Holding";
-    if(Math.abs(delta)>=5){
-     const improving=delta>0; const magnitude=Math.abs(delta); alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:improving?"INFO":magnitude>=10?"CRITICAL":"WARNING",type:improving?"SCORE_IMPROVEMENT":"SCORE_DROP",title:`${name} AI score ${improving?"improved":"fell"}`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta>0?"+":""}${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_CHANGE:${x.instrument_id}:${priorScore.toFixed(1)}:${currentScore.toFixed(1)}`});
+    if(Math.abs(delta)>=5){const improving=delta>0; const magnitude=Math.abs(delta); alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:improving?"INFO":magnitude>=10?"CRITICAL":"WARNING",type:improving?"SCORE_IMPROVEMENT":"SCORE_DROP",title:`${name} AI score ${improving?"improved":"fell"}`,message:`AI score changed from ${priorScore.toFixed(1)} to ${currentScore.toFixed(1)} (${delta>0?"+":""}${delta.toFixed(1)}) since the previous scan.`,dedupe_key:`SCORE_CHANGE:${x.instrument_id}:${priorScore.toFixed(1)}:${currentScore.toFixed(1)}`});
     }
     const priorRisk=String(prior.risk_level||"").toUpperCase(); const currentRisk=String(sc.risk_level||"").toUpperCase();
     if(priorRisk&&currentRisk&&priorRisk!==currentRisk){const worsened=["HIGH","CRITICAL"].includes(currentRisk)&&!["HIGH","CRITICAL"].includes(priorRisk);alerts.push({user_id:userId,instrument_id:x.instrument_id,severity:worsened?"CRITICAL":"WARNING",type:"RISK_CHANGE",title:`${name} risk changed ${priorRisk} → ${currentRisk}`,message:`AI risk classification moved from ${priorRisk} to ${currentRisk} since the previous scan.`,dedupe_key:`RISK_CHANGE:${x.instrument_id}:${priorRisk}:${currentRisk}`});}
@@ -53,13 +52,34 @@ async function generateForAllUsers(){
  return alerts;
 }
 
+async function persistAlerts(generated){
+ if(!generated.length)return 0;
+ const deduped=[...new Map(generated.map(x=>[`${x.user_id}|${x.dedupe_key}`,x])).values()];
+ const users=[...new Set(deduped.map(x=>x.user_id))];
+ const existingKeys=new Set();
+ for(const userId of users){
+  const keys=deduped.filter(x=>x.user_id===userId).map(x=>x.dedupe_key).filter(Boolean);
+  for(let offset=0;offset<keys.length;offset+=500){
+   const chunk=keys.slice(offset,offset+500);
+   const {data,error}=await admin.from("portfolio_alerts").select("dedupe_key").eq("user_id",userId).in("dedupe_key",chunk);
+   if(error)throw new Error(error.message);
+   for(const row of data||[])if(row.dedupe_key)existingKeys.add(`${userId}|${row.dedupe_key}`);
+  }
+ }
+ const fresh=deduped.filter(x=>!existingKeys.has(`${x.user_id}|${x.dedupe_key}`));
+ if(!fresh.length)return 0;
+ const {error}=await admin.from("portfolio_alerts").insert(fresh);
+ if(error)throw new Error(error.message);
+ return fresh.length;
+}
+
 export async function GET(request){
  try{
   const auth=request.headers.get("authorization")||""; const token=auth.replace(/^Bearer\s+/i,"").trim();
   if(pipelineAuth(request)){
    const generated=await generateForAllUsers();
-   if(generated.length){const {error}=await admin.from("portfolio_alerts").upsert(generated,{onConflict:"user_id,dedupe_key",ignoreDuplicates:true});if(error)throw new Error(error.message);}
-   return NextResponse.json({success:true,engine_version:ENGINE_VERSION,mode:"pipeline",generated:generated.length});
+   const persisted=await persistAlerts(generated);
+   return NextResponse.json({success:true,engine_version:ENGINE_VERSION,mode:"pipeline",generated:generated.length,persisted});
   }
   if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});
   const supabase=userClient(token); const {data:userResult,error:userError}=await supabase.auth.getUser(token);
