@@ -37,9 +37,48 @@ async function buildForUser(client,userId){
   client.from("market_regime_history").select("regime,portfolio_mode,snapshot_at").order("snapshot_at",{ascending:false}).limit(1)
  ]);
  for(const x of [h,i,s,mr])if(x.error)throw new Error(x.error.message);
- const im=new Map((i.data||[]).map(x=>[x.id,x])),sm=new Map((s.data||[]).map(x=>[x.instrument_id,x])),total=(h.data||[]).reduce((a,x)=>a+(n(x.current_value)||0),0),regime=mr.data?.[0]?.regime||"NEUTRAL";
- const results=(h.data||[]).map(row=>{const sc=sm.get(row.instrument_id)||{},meta=im.get(row.instrument_id)||{},lt=n(sc.long_term_score),st=n(sc.short_term_score),risk=n(sc.risk_score),val=n(sc.valuation_score),final=n(sc.final_ai_score),weight=total>0?(n(row.current_value)||0)/total*100:0,pnl=row.pnl_percentage??((n(row.invested_value)||0)>0?(n(row.unrealized_pnl)||0)/(n(row.invested_value)||1)*100:null),d=decide({long_term_score:lt,short_term_score:st,risk_score:risk,valuation_score:val,final_ai_score:final,confidence:sc.confidence,data_completeness:sc.data_completeness,freshness:sc.freshness_status,weight,pnl,regime});return{instrument_id:row.instrument_id,company_name:meta.company_name||meta.symbol||"Holding",symbol:meta.symbol||null,sector:meta.sector||"OTHER",is_existing_holding:true,portfolio_weight_pct:+weight.toFixed(2),pnl_pct:pnl==null?null:+Number(pnl).toFixed(2),long_term_score:lt,long_term_grade:gradeLT(lt),short_term_score:st,short_term_grade:gradeST(st),risk_score:risk,valuation_score:val,final_ai_score:final,final_grade:gradeFinal(final),confidence:n(sc.confidence),data_completeness:n(sc.data_completeness),freshness_status:sc.freshness_status||"MISSING",score_version:sc.score_version||"legacy",model_action:sc.action||null,risk_level:sc.risk_level||null,rating:sc.rating||null,decision:d.action,conviction:d.conviction,reason:d.reason,score_breakdown:sc.score_breakdown||{},market_regime:regime};});
- const rank={EXIT:0,REDUCE:1,"SHORT-TERM OPPORTUNITY / NOT A CORE BUY":2,"HOLD / WAIT FOR BETTER ENTRY":3,"HOLD / WAIT":4,WATCH:5,HOLD:6,ACCUMULATE:7,BUY:8};results.sort((a,b)=>(rank[a.decision]??99)-(rank[b.decision]??99)||(b.confidence||0)-(a.confidence||0));return{user_id:userId,market_regime:regime,portfolio_value:total,decisions:results};
+ const im=new Map((i.data||[]).map(x=>[x.id,x]));
+ const sm=new Map((s.data||[]).map(x=>[x.instrument_id,x]));
+ const total=(h.data||[]).reduce((a,x)=>a+(n(x.current_value)||0),0);
+ const regime=mr.data?.[0]?.regime||"NEUTRAL";
+ const results=(h.data||[]).map(row=>{
+  const sc=sm.get(row.instrument_id)||{},meta=im.get(row.instrument_id)||{};
+  const lt=n(sc.long_term_score),st=n(sc.short_term_score),risk=n(sc.risk_score),val=n(sc.valuation_score),final=n(sc.final_ai_score);
+  const weight=total>0?((n(row.current_value)||0)/total*100):0;
+  const pnl=row.pnl_percentage??((n(row.invested_value)||0)>0?(n(row.unrealized_pnl)||0)/(n(row.invested_value)||1)*100:null);
+  const d=decide({long_term_score:lt,short_term_score:st,risk_score:risk,valuation_score:val,final_ai_score:final,confidence:sc.confidence,data_completeness:sc.data_completeness,freshness:sc.freshness_status,weight,pnl,regime});
+  return{instrument_id:row.instrument_id,company_name:meta.company_name||meta.symbol||"Holding",symbol:meta.symbol||null,sector:meta.sector||"OTHER",is_existing_holding:true,portfolio_weight_pct:+weight.toFixed(2),pnl_pct:pnl==null?null:+Number(pnl).toFixed(2),long_term_score:lt,long_term_grade:gradeLT(lt),short_term_score:st,short_term_grade:gradeST(st),risk_score:risk,valuation_score:val,final_ai_score:final,final_grade:gradeFinal(final),confidence:n(sc.confidence),data_completeness:n(sc.data_completeness),freshness_status:sc.freshness_status||"MISSING",score_version:sc.score_version||"legacy",model_action:sc.action||null,risk_level:sc.risk_level||null,rating:sc.rating||null,decision:d.action,conviction:d.conviction,reason:d.reason,score_breakdown:sc.score_breakdown||{},market_regime:regime};
+ });
+ const rank={EXIT:0,REDUCE:1,"SHORT-TERM OPPORTUNITY / NOT A CORE BUY":2,"HOLD / WAIT FOR BETTER ENTRY":3,"HOLD / WAIT":4,WATCH:5,HOLD:6,ACCUMULATE:7,BUY:8};
+ results.sort((a,b)=>(rank[a.decision]??99)-(rank[b.decision]??99)||(b.confidence||0)-(a.confidence||0));
+ return{user_id:userId,market_regime:regime,portfolio_value:total,decisions:results};
 }
-async function persist(decisions,userId){let updated=0;for(const item of decisions||[]){if(!item.instrument_id||!item.decision)continue;const{error}=await admin.from("ai_scores").update({action:item.decision,updated_at:new Date().toISOString()}).eq("instrument_id",item.instrument_id).eq("user_id",userId);if(error)throw new Error(`Decision persistence failed for ${item.company_name||item.instrument_id}: ${error.message}`);updated++;}return updated;}
-export async function GET(request){try{const token=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});const client=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});const{data:u,error:ue}=await client.auth.getUser(token);if(ue||!u?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});const portfolio=await buildForUser(client,u.user.id),persisted=await persist(portfolio.decisions,u.user.id),decision_counts={};for(const x of portfolio.decisions)decision_counts[x.decision]=(decision_counts[x.decision]||0)+1;return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts,persisted_actions:persisted});}catch(error){console.error("Decision engine v5.1 error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});}}
+
+async function persist(decisions,userId){
+ let updated=0;
+ for(const item of decisions||[]){
+  if(!item.instrument_id||!item.decision)continue;
+  const{error}=await admin.from("ai_scores").update({action:item.decision,updated_at:new Date().toISOString()}).eq("instrument_id",item.instrument_id).eq("user_id",userId);
+  if(error)throw new Error(`Decision persistence failed for ${item.company_name||item.instrument_id}: ${error.message}`);
+  updated++;
+ }
+ return updated;
+}
+
+export async function GET(request){
+ try{
+  const token=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();
+  if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});
+  const client=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}});
+  const{data:u,error:ue}=await client.auth.getUser(token);
+  if(ue||!u?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});
+  const portfolio=await buildForUser(client,u.user.id);
+  const persisted=await persist(portfolio.decisions,u.user.id);
+  const decision_counts={};
+  for(const x of portfolio.decisions)decision_counts[x.decision]=(decision_counts[x.decision]||0)+1;
+  return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts,persisted_actions:persisted});
+ }catch(error){
+  console.error("Decision engine v5.1 error:",error);
+  return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});
+ }
+}
