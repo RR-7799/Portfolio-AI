@@ -64,7 +64,7 @@ export default function DecisionDock() {
 
   return (
     <div style={{ position: "fixed", left: 20, bottom: 20, zIndex: 49, maxWidth: 310 }}>
-      <Link href="/dashboard" style={{ textDecoration: "none" }}>
+      <Link href="/" style={{ textDecoration: "none" }}>
         <div className="card" style={{ padding: "12px 16px", boxShadow: "0 10px 30px rgba(0,0,0,.16)" }}>
           <div className="eyebrow">DECISION ENGINE V2</div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
