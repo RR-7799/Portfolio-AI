@@ -37,11 +37,10 @@ export default function RunScanButton() {
     if (running) return;
 
     setRunning(true);
-    setMessage("Refreshing data and intelligence…");
+    setMessage("Refreshing data, intelligence and decisions…");
     setError("");
 
     try {
-      // Always retrieve the latest session so we do not send a stale token.
       const { data: sessionData, error: sessionError } =
         await supabase.auth.getSession();
 
@@ -89,10 +88,14 @@ export default function RunScanButton() {
       const buys = summary.buy_candidates == null ? "—" : summary.buy_candidates;
 
       setMessage(
-        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts`
+        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts · decisions synced`
       );
 
       window.dispatchEvent(new CustomEvent("portfolio-scan-complete"));
+
+      // The dashboard reads the latest ai_scores directly. Reload so its visible
+      // action column immediately reflects Decision Engine V2's final decisions.
+      window.setTimeout(() => window.location.reload(), 500);
     } catch (scanError) {
       console.error("Portfolio scan error:", scanError);
       setError(scanError?.message || "Portfolio scan failed.");
