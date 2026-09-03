@@ -4,7 +4,8 @@ import ChangeDock from "./components/ChangeDock";
 import DecisionDock from "./components/DecisionDock";
 import RunScanButton from "./components/RunScanButton";
 import LiveStockTable from "./components/LiveStockTable";
+import CoverageBadge from "./components/CoverageBadge";
 
 export const metadata={title:"Portfolio AI",description:"Personal portfolio tracker"};
 
-export default function RootLayout({children}){return <html lang="en"><body>{children}<RunScanButton /><DecisionDock /><ChangeDock /><AlertDock /><LiveStockTable /></body></html>}
+export default function RootLayout({children}){return <html lang="en"><body>{children}<RunScanButton /><DecisionDock /><ChangeDock /><AlertDock /><LiveStockTable /><CoverageBadge /></body></html>}
