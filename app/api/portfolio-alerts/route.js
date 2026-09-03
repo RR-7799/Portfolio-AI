@@ -14,25 +14,14 @@ async function generateForAllUsers(){
  const [h,i,s,m]=await Promise.all([
   admin.from("holdings").select("user_id,instrument_id,current_value,invested_value,unrealized_pnl,pnl_percentage"),
   admin.from("instruments").select("id,company_name,symbol,sector"),
-  // updated_at is the canonical score refresh timestamp written by the scoring engines.
-  // Keep the latest two rows per instrument so alert comparisons remain scan-aware.
   admin.from("ai_scores").select("instrument_id,total_score,action,risk_level,rating,score_breakdown,updated_at").order("updated_at",{ascending:false}),
   admin.from("market_regime_history").select("regime,score,confidence,portfolio_mode,snapshot_at").order("snapshot_at",{ascending:false}).limit(2)
  ]);
- const queryErrors=[
-  ["holdings",h.error],
-  ["instruments",i.error],
-  ["ai_scores",s.error],
-  ["market_regime_history",m.error],
- ].filter(([,error])=>error);
+ const queryErrors=[["holdings",h.error],["instruments",i.error],["ai_scores",s.error],["market_regime_history",m.error]].filter(([,error])=>error);
  if(queryErrors.length) throw new Error(queryErrors.map(([name,error])=>`${name} query failed: ${error.message}`).join(" | "));
  const im=new Map((i.data||[]).map(x=>[x.id,x]));
  const scoreHistory=new Map();
- for(const row of (s.data||[])){
-  const list=scoreHistory.get(row.instrument_id)||[];
-  if(list.length<2)list.push(row);
-  scoreHistory.set(row.instrument_id,list);
- }
+ for(const row of (s.data||[])){const list=scoreHistory.get(row.instrument_id)||[];if(list.length<2)list.push(row);scoreHistory.set(row.instrument_id,list);}
  const sm=new Map([...scoreHistory].map(([id,list])=>[id,list[0]]));
  const users=[...new Set((h.data||[]).map(x=>x.user_id).filter(Boolean))];
  const regime=m.data?.[0]||null; const previous=m.data?.[1]||null; const alerts=[];
@@ -44,8 +33,6 @@ async function generateForAllUsers(){
    const weight=total>0?n(x.current_value)/total*100:0; const pnl=n(x.pnl_percentage); const name=meta.company_name||meta.symbol||"Holding";
    const currentAction=up(sc.action); const priorAction=up(prior?.action); const currentRisk=up(sc.risk_level); const priorRisk=up(prior?.risk_level);
    const currentFresh=up(freshness.status); const priorFresh=up(priorFreshness.status);
-   // Only attach an instrument_id when the referenced instrument exists. This prevents
-   // one orphaned holding from failing the entire alert batch on the FK constraint.
    const alertInstrumentId=im.has(x.instrument_id)?x.instrument_id:null;
    if(weight>=15)alerts.push({user_id:userId,instrument_id:alertInstrumentId,severity:"CRITICAL",type:"CONCENTRATION",title:`${name} is oversized`,message:`Portfolio weight is ${weight.toFixed(1)}%, above the 15% concentration guardrail.`,dedupe_key:`CONCENTRATION:${x.instrument_id}:15`});
    if(currentRisk==="CRITICAL")alerts.push({user_id:userId,instrument_id:alertInstrumentId,severity:"CRITICAL",type:"CRITICAL_RISK",title:`${name} has critical risk`,message:`AI risk classification is CRITICAL with score ${sc.total_score??"—"}.`,dedupe_key:`CRITICAL_RISK:${x.instrument_id}`});
