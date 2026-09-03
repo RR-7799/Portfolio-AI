@@ -3,7 +3,8 @@ import AlertDock from "./components/AlertDock";
 import ChangeDock from "./components/ChangeDock";
 import DecisionDock from "./components/DecisionDock";
 import RunScanButton from "./components/RunScanButton";
+import LiveQuoteDock from "./components/LiveQuoteDock";
 
 export const metadata={title:"Portfolio AI",description:"Personal portfolio tracker"};
 
-export default function RootLayout({children}){return <html lang="en"><body>{children}<RunScanButton /><DecisionDock /><ChangeDock /><AlertDock /></body></html>}
+export default function RootLayout({children}){return <html lang="en"><body>{children}<RunScanButton /><DecisionDock /><ChangeDock /><AlertDock /><LiveQuoteDock /></body></html>}
