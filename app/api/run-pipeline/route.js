@@ -6,7 +6,7 @@ import { GET as runSnapshot } from "../portfolio-snapshot/route";
 import { GET as runAlerts } from "../portfolio-alerts/route";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "pipeline_v1_4";
+const ENGINE_VERSION = "pipeline_v1_5";
 const BATCH_SIZE = 10;
 function isAuthorized(request){const s=process.env.PIPELINE_SECRET;if(!s)return false;const h=request.headers.get("x-pipeline-secret");const a=request.headers.get("authorization");return h===s||(a?.startsWith("Bearer ")&&a.slice(7)===s);}
 async function parseJsonResponse(r){try{return await r.json();}catch{return {success:false,error:"Pipeline stage returned a non-JSON response",status:r.status};}}
@@ -19,13 +19,9 @@ export async function GET(request){
   if(stage==="freshness"||stage==="all"){const r=await runStage("freshness_audit",runFreshness,`${origin}/api/freshness-report`);stages.push(r);if(!r.success)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,failed_stage:r.stage,elapsed_ms:Date.now()-startedAt,stages},{status:502});}
   if(stage==="score"||stage==="all"){const r=await runStage("safe_v4_2_score",runV42,`${origin}/api/score-portfolio-safe-v42`);stages.push(r);if(!r.success)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,failed_stage:r.stage,elapsed_ms:Date.now()-startedAt,stages},{status:502});}
   if(stage==="snapshot"||stage==="all"){const r=await runStage("portfolio_snapshot",runSnapshot,`${origin}/api/portfolio-snapshot`,headers);stages.push(r);if(!r.success)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,failed_stage:r.stage,elapsed_ms:Date.now()-startedAt,stages},{status:502});}
-  if(stage==="alerts"||stage==="all"){
-   const r=await runStage("portfolio_alerts",runAlerts,`${origin}/api/portfolio-alerts`,headers);stages.push(r);
-   // Alerts are auxiliary. Whether the route returns an error or throws, never block
-   // scoring, snapshots, or the user-scoped Decision Engine because notifications failed.
-  }
+  if(stage==="alerts"||stage==="all"){const r=await runStage("portfolio_alerts",runAlerts,`${origin}/api/portfolio-alerts`,headers);stages.push(r);}
   const syncStages=stages.filter(x=>x.stage.startsWith("upstox_sync_"));const syncResults=syncStages.flatMap(x=>x.data?.results||[]);const finalScore=stages.find(x=>x.stage==="safe_v4_2_score");const freshness=stages.find(x=>x.stage==="freshness_audit");const snapshot=stages.find(x=>x.stage==="portfolio_snapshot");const alerts=stages.find(x=>x.stage==="portfolio_alerts");
   const alertsWarning=alerts&&!alerts.success?(alerts.data?.error||alerts.data?.message||`Alert stage failed with HTTP ${alerts.http_status}.`):alerts?.data?.warning||null;
-  return NextResponse.json({success:true,engine_version:ENGINE_VERSION,stage,elapsed_ms:Date.now()-startedAt,pipeline_summary:{sync_batches:syncStages.length,sync_successful:syncResults.filter(x=>x.success===true).length,sync_failed:syncResults.filter(x=>x.success===false&&x.skipped!==true).length,freshness_completed:Boolean(freshness?.success),scoring_completed:Boolean(finalScore?.success),snapshot_completed:Boolean(snapshot?.success),alerts_completed:Boolean(alerts?.success),alerts_generated:alerts?.data?.generated??null,alerts_warning:alertsWarning,snapshot_users:snapshot?.data?.users??null,scored:finalScore?.data?.scored??null,buy_candidates:finalScore?.data?.buy_candidates??null,average_score:finalScore?.data?.average_score??null,freshness_counts:finalScore?.data?.freshness_counts??freshness?.data?.freshness_counts??null},stages});
+  return NextResponse.json({success:true,engine_version:ENGINE_VERSION,stage,elapsed_ms:Date.now()-startedAt,pipeline_summary:{sync_batches:syncStages.length,sync_successful:syncResults.filter(x=>x.success===true).length,sync_failed:syncResults.filter(x=>x.success===false&&x.skipped!==true).length,freshness_completed:Boolean(freshness?.success),scoring_completed:Boolean(finalScore?.success),snapshot_completed:Boolean(snapshot?.success),alerts_completed:Boolean(alerts?.success),alerts_generated:alerts?.data?.new_alerts??null,alerts_candidates:alerts?.data?.generated??null,alerts_warning:alertsWarning,snapshot_users:snapshot?.data?.users??null,scored:finalScore?.data?.scored??null,buy_candidates:finalScore?.data?.buy_candidates??null,average_score:finalScore?.data?.average_score??null,freshness_counts:finalScore?.data?.freshness_counts??freshness?.data?.freshness_counts??null},stages});
  }catch(error){console.error("Portfolio AI pipeline error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,stage,elapsed_ms:Date.now()-startedAt,error:error?.message||"Unknown pipeline error",stages},{status:500});}
 }
