@@ -108,8 +108,15 @@ export default function RunScanButton() {
       const generated = Number(summary.alerts_generated || 0);
       const scored = summary.scored == null ? "—" : summary.scored;
       const buys = summary.buy_candidates == null ? "—" : summary.buy_candidates;
+      const coverage = summary.coverage || {};
+      const totalPositions = coverage.total_positions == null ? null : coverage.total_positions;
+      const unscored = coverage.unscored_positions == null ? null : coverage.unscored_positions;
+      const coverageText =
+        totalPositions == null || unscored == null
+          ? ""
+          : ` · ${totalPositions} positions · ${unscored} unscored`;
       const completedMessage =
-        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts · decisions synced`;
+        `Scan complete · ${scored} scored · ${buys} BUY candidates · ${generated} new alerts${coverageText} · decisions synced`;
 
       // Persist the result before reloading so the user sees it on the fresh
       // dashboard instead of losing it during navigation.
