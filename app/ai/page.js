@@ -22,6 +22,7 @@ function ScoreCard({ label, value, grade }) {
 
 export default function AIPage() {
   const [session, setSession] = useState(null), [rows, setRows] = useState([]), [loading, setLoading] = useState(true), [error, setError] = useState(""), [selected, setSelected] = useState(null);
+  const [preview, setPreview] = useState(null), [previewLoading, setPreviewLoading] = useState(false), [previewError, setPreviewError] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -62,6 +63,23 @@ export default function AIPage() {
     finally { setLoading(false); }
   }
 
+  async function runV5Preview() {
+    if (!session?.access_token) return;
+    setPreviewLoading(true); setPreviewError(""); setPreview(null);
+    try {
+      const response = await fetch("/api/scoring-v5-preview", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body?.success) throw new Error(body?.error || `V5 preview failed (${response.status}).`);
+      setPreview(body);
+    } catch (e) {
+      console.error("V5 preview failed", e);
+      setPreviewError(e?.message || "Unable to run V5 preview.");
+    } finally { setPreviewLoading(false); }
+  }
+
   const averages = useMemo(() => {
     const average = key => { const values = rows.map(r => r[key]).filter(v => v != null && Number.isFinite(Number(v))); return values.length ? values.reduce((s, v) => s + Number(v), 0) / values.length : null; };
     return { long: average("long_term_score"), short: average("short_term_score"), risk: average("risk_score"), valuation: average("valuation_score"), final: average("final_ai_score") };
@@ -76,6 +94,7 @@ export default function AIPage() {
     {!loading ? <>
       <section className="grid" style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}><ScoreCard label="AVERAGE LONG-TERM" value={averages.long}/><ScoreCard label="AVERAGE SHORT-TERM" value={averages.short}/><ScoreCard label="AVERAGE RISK" value={averages.risk}/><ScoreCard label="AVERAGE VALUATION" value={averages.valuation}/><ScoreCard label="AVERAGE FINAL" value={averages.final}/></section>
       <section className="card"><div className="eyebrow">HOW TO READ THIS</div><p><strong>Long-term</strong> evaluates multi-year business quality. <strong>Short-term</strong> evaluates the current market setup. Risk, valuation, confidence and freshness remain independent signals.</p></section>
+      <section className="card"><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}><div><div className="eyebrow">V5.0 VALIDATION</div><h2 style={{ margin: "4px 0" }}>Adaptive scorer dry-run</h2><p style={{ margin: 0 }}>Runs the seven test stocks with the live market regime. No database writes.</p></div><button onClick={runV5Preview} disabled={previewLoading}>{previewLoading ? "Running V5…" : "Run V5 Preview"}</button></div>{previewError ? <div className="error" style={{ marginTop: 14 }}>{previewError}</div> : null}{preview ? <div style={{ marginTop: 18 }}><div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}><Badge>{preview.market_regime?.label || "UNKNOWN"}</Badge><span>Regime score: <strong>{fmt(preview.market_regime?.score)}</strong></span><span>Confidence: <strong>{preview.market_regime?.confidence ?? "—"}%</strong></span><span>Dry run: <strong>YES</strong></span></div><div style={{ overflowX: "auto" }}><table><thead><tr><th>Company</th><th>LT</th><th>ST</th><th>Risk</th><th>Valuation</th><th>Final</th><th>Confidence</th><th>Action</th></tr></thead><tbody>{(preview.results || []).map(r => <tr key={r.instrument_id || r.company}><td><strong>{r.company}</strong><small>{r.symbol || "—"} · {r.sector || "—"}</small></td><td>{fmt(r.long_term_score)}</td><td>{fmt(r.short_term_score)}</td><td>{fmt(r.risk_score)}</td><td>{fmt(r.valuation_score)}</td><td><strong>{fmt(r.final_ai_score)}</strong></td><td>{r.confidence == null ? "—" : `${Number(r.confidence).toFixed(0)}%`}</td><td><Badge>{r.action || "—"}</Badge></td></tr>)}</tbody></table></div></div> : null}</section>
       <section className="card"><div style={{ overflowX: "auto" }}><table><thead><tr><th>Company</th><th>Long-term</th><th>Short-term</th><th>Risk</th><th>Valuation</th><th>Final AI</th><th>Confidence</th><th>Freshness</th><th>Decision</th></tr></thead><tbody>{rows.map(r => <tr key={r.instrument_id} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}><td><strong>{r.company_name}</strong><small>{r.symbol} · {r.sector}</small></td><td><strong>{fmt(r.long_term_score)}</strong><small>{r.long_term_grade || "—"}</small></td><td><strong>{fmt(r.short_term_score)}</strong><small>{r.short_term_grade || "—"}</small></td><td>{fmt(r.risk_score)}</td><td>{fmt(r.valuation_score)}</td><td><strong>{fmt(r.final_ai_score)}</strong><small>{r.rating}</small></td><td>{r.confidence == null ? "—" : `${Number(r.confidence).toFixed(0)}%`}<small>{r.data_completeness == null ? "" : `${Number(r.data_completeness).toFixed(0)}% complete`}</small></td><td><Badge>{r.freshness_status}</Badge></td><td><Badge>{r.action}</Badge></td></tr>)}</tbody></table>{!rows.length ? <p>No scored holdings are available yet.</p> : null}</div></section>
     </> : null}
     {selected ? <div onClick={() => setSelected(null)} style={{ position: "fixed", inset: 0, background: "rgba(23,32,51,.35)", display: "grid", placeItems: "center", padding: 20, zIndex: 20 }}><div className="card" onClick={e => e.stopPropagation()} style={{ width: "min(900px,100%)", maxHeight: "90vh", overflowY: "auto" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><div><div className="eyebrow">INVESTMENT INTELLIGENCE</div><h2>{selected.company_name}</h2><p>{selected.symbol} · {selected.sector}</p></div><button onClick={() => setSelected(null)}>Close</button></div><div className="grid" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}><ScoreCard label="LONG-TERM" value={selected.long_term_score} grade={selected.long_term_grade}/><ScoreCard label="SHORT-TERM" value={selected.short_term_score} grade={selected.short_term_grade}/><ScoreCard label="RISK" value={selected.risk_score}/><ScoreCard label="VALUATION" value={selected.valuation_score}/><ScoreCard label="FINAL AI" value={selected.final_ai_score} grade={selected.rating}/></div><div style={{ marginTop: 18 }}><span className="label">MODEL ACTION</span><p><Badge>{selected.action}</Badge></p><span className="label">CONFIDENCE / DATA</span><p>{selected.confidence == null ? "—" : `${Number(selected.confidence).toFixed(0)}% confidence`} · {selected.data_completeness == null ? "—" : `${Number(selected.data_completeness).toFixed(0)}% complete`} · {selected.freshness_status}</p><span className="label">WHY</span><p>{selected.breakdown.reason || "Decision combines long-term quality, short-term opportunity, risk, valuation and data confidence."}</p><span className="label">SCORER VERSION</span><p>{selected.score_version}</p></div></div></div> : null}
