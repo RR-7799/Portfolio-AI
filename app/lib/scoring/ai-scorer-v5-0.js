@@ -2,16 +2,24 @@ const clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,v));
 const num=v=>Number.isFinite(Number(v))?Number(v):null;
 const avg=xs=>{const a=xs.filter(v=>v!=null&&Number.isFinite(v));return a.length?a.reduce((s,v)=>s+v,0)/a.length:null;};
 const round=v=>v==null?null:Number(Number(v).toFixed(1));
-export const ENGINE_VERSION="ai_scorer_v5_2";
+export const ENGINE_VERSION="ai_scorer_v5_3";
 
 function median(xs){const a=xs.map(num).filter(v=>v!=null).sort((x,y)=>x-y);if(!a.length)return null;const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;}
 function percentile(value,peers,higher=true){const v=num(value),a=peers.map(num).filter(x=>x!=null).sort((x,y)=>x-y);if(v==null||a.length<3)return null;let below=0,equal=0;for(const x of a){if(x<v)below++;else if(x===v)equal++;}const p=((below+Math.max(0,equal-1)/2)/Math.max(1,a.length-1))*100;return clamp(higher?p:100-p);}
-function adaptive(value,peers,higher=true){const v=num(value),a=peers.map(num).filter(x=>x!=null);if(v==null||a.length<3)return null;const p=percentile(v,a,higher),m=median(a),mad=median(a.map(x=>Math.abs(x-m)));if(p==null||m==null)return null;if(!mad)return p;const z=(higher?1:-1)*(v-m)/mad;return clamp(p*.6+clamp(50+50*Math.tanh(z/2))*.4);}
+function adaptive(value,peers,higher=true){const v=num(value),a=peers.map(num).filter(x=>x!=null);if(v==null)return null;if(a.length<3)return absoluteFallback(v,higher);const p=percentile(v,a,higher),m=median(a),mad=median(a.map(x=>Math.abs(x-m)));if(p==null||m==null)return absoluteFallback(v,higher);if(!mad)return p;const z=(higher?1:-1)*(v-m)/mad;return clamp(p*.6+clamp(50+50*Math.tanh(z/2))*.4);}
+function absoluteFallback(v,higher){if(v==null)return null;return clamp(higher?v:100-v);}
+function adaptiveWithAbsolute(value,peers,absolute,higher=true){const v=num(value),a=adaptive(v,peers,higher);const abs=typeof absolute==="function"?absolute(v):absolute;if(a==null)return abs==null?null:clamp(abs);if(abs==null)return a;return clamp(a*.6+clamp(abs)*.4);}
 function ocfYield(f){const ocf=num(f.operating_cash_flow),mc=num(f.market_cap);return ocf!=null&&mc>0?(ocf/mc)*100:null;}
-function growth(f,peers){const s=adaptive(f.sales_growth,peers.map(x=>x.sales_growth),true),p=adaptive(f.profit_growth,peers.map(x=>x.profit_growth),true);return avg(s!=null&&p!=null?[s*.65+p*.35]:[s??p]);}
-function profitability(f,peers,sector){return adaptive(f.roe,peers.map(x=>x.roe),true)??(sector!=="BANKING"&&sector!=="NBFC"?adaptive(f.roce,peers.map(x=>x.roce),true):null);}
-function balance(f,peers,sector){if(["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector))return null;return adaptive(f.debt_to_equity,peers.map(x=>x.debt_to_equity),false);}
-function cash(f,peers,sector){if(["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector))return null;return adaptive(ocfYield(f),peers.map(ocfYield),true);}
+function growthAbsolute(v){if(v==null)return null;return v>=25?95:v>=15?88:v>=10?80:v>=5?70:v>=0?58:v>=-5?45:v>=-15?30:15;}
+function profitGrowthAbsolute(v){if(v==null)return null;return v>=25?95:v>=15?88:v>=10?80:v>=5?70:v>=0?58:v>=-10?42:v>=-25?28:12;}
+function roeAbsolute(v){if(v==null)return null;return v>=25?95:v>=20?88:v>=15?80:v>=12?72:v>=8?62:v>=5?48:v>=0?30:15;}
+function roceAbsolute(v){if(v==null)return null;return v>=25?95:v>=20?88:v>=15?80:v>=12?72:v>=8?62:v>=5?48:v>=0?30:15;}
+function debtAbsolute(v){if(v==null)return null;return v<=0.1?95:v<=0.25?88:v<=0.5?78:v<=0.75?68:v<=1?55:v<=1.5?40:v<=2?28:15;}
+function cashAbsolute(v){if(v==null)return null;return v>=10?95:v>=7?88:v>=5?80:v>=3?70:v>=1?60:v>=0?50:25;}
+function growth(f,peers){const s=adaptiveWithAbsolute(f.sales_growth,peers.map(x=>x.sales_growth),growthAbsolute,true);const p=adaptiveWithAbsolute(f.profit_growth,peers.map(x=>x.profit_growth),profitGrowthAbsolute,true);return avg(s!=null&&p!=null?[s*.65+p*.35]:[s??p]);}
+function profitability(f,peers,sector){if(["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector))return adaptiveWithAbsolute(f.roe,peers.map(x=>x.roe),roeAbsolute,true);const roe=adaptiveWithAbsolute(f.roe,peers.map(x=>x.roe),roeAbsolute,true);const roce=adaptiveWithAbsolute(f.roce,peers.map(x=>x.roce),roceAbsolute,true);return avg(roe!=null&&roce!=null?[roe*.55+roce*.45]:[roe??roce]);}
+function balance(f,peers,sector){if(["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector))return null;return adaptiveWithAbsolute(f.debt_to_equity,peers.map(x=>x.debt_to_equity),debtAbsolute,false);}
+function cash(f,peers,sector){if(["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector))return null;return adaptiveWithAbsolute(ocfYield(f),peers.map(ocfYield),cashAbsolute,true);}
 function ownership(f){const p=num(f.promoter_pledge);return p==null?50:clamp(100-p*2);}
 
 function valuationAnalysis(f,peers,sector,currentPrice){
@@ -34,11 +42,11 @@ function longTerm(f,peers,sector,currentPrice){
  const val=valuationAnalysis(f,peers,sector,currentPrice);
  const defs=[
   ["Growth quality",growth(f,peers),25],
-  ["Profitability / capital efficiency",profitability(f,peers,sector),25],
+  ["Profitability / capital efficiency",profitability(f,peers,sector),30],
   ["Balance-sheet resilience",balance(f,peers,sector),15],
   ["Cash-flow quality",cash(f,peers,sector),15],
   ["Ownership risk",ownership(f),5],
-  ["Valuation",val.score,15]
+  ["Valuation context",val.score,10]
  ];
  const available=defs.filter(x=>x[1]!=null),w=available.reduce((s,x)=>s+x[2],0);
  const score=w?available.reduce((s,x)=>s+x[1]*x[2],0)/w:null;
@@ -62,7 +70,7 @@ function shortTerm(t,regime){
 
 function risk(f,peers,t,sector){
  const financial=["BANKING","NBFC","FINANCIAL_SERVICES"].includes(sector),defs=[];
- if(financial)defs.push(["Profitability resilience",adaptive(f.roe,peers.map(x=>x.roe),true),45]);
+ if(financial)defs.push(["Profitability resilience",adaptiveWithAbsolute(f.roe,peers.map(x=>x.roe),roeAbsolute,true),45]);
  else{defs.push(["Leverage resilience",balance(f,peers,sector),35]);defs.push(["Cash-flow resilience",cash(f,peers,sector),30]);defs.push(["Profitability resilience",profitability(f,peers,sector),20]);}
  const av=t?.available?num(t.volatility?.annualized_20d_pct):null;defs.push(["Market volatility",av==null?null:clamp(100-av*1.5),financial?55:15]);
  const a=defs.filter(x=>x[1]!=null),w=a.reduce((s,x)=>s+x[2],0);return{score:w?round(a.reduce((s,x)=>s+x[1]*x[2],0)/w):null,factors:a.map(([name,s,weight])=>({name,score:round(s),weight})),unavailable:financial?["Asset quality / capital adequacy / provisioning"]:[]};
@@ -73,15 +81,16 @@ export function scoreLabel(v){if(v==null)return"Unavailable";if(v>=90)return"Exc
 
 export function scoreStock({fundamentals,peers=[],technical,regime="NEUTRAL",sector="OTHER",currentPrice=null}){
  const f=fundamentals||{},lt=longTerm(f,peers,sector,currentPrice),st=shortTerm(technical,regime),r=risk(f,peers,technical,sector);
- // Final AI score is now the LT Investment Score. ST is deliberately separate.
- const investmentScore=lt.score;
+ const weights={long_term:0.50,short_term:0.25,risk:0.15,valuation:0.10};
+ const core=[lt.score,st.score,r.score,lt.valuation.score];
+ const final_ai_score=core.every(v=>v!=null)?round(lt.score*weights.long_term+st.score*weights.short_term+r.score*weights.risk+lt.valuation.score*weights.valuation):null;
  const fields=["sales_growth","profit_growth","roe","roce","debt_to_equity","operating_cash_flow","promoter_holding","promoter_pledge","fii_holding","dii_holding","pe_ratio","pb_ratio","eps","book_value_per_share"];
  const coverage=fields.filter(k=>num(f[k])!=null).length/fields.length;
  const technicalCoverage=technical?.available?1:0;
  const completeness=round((coverage*.75+technicalCoverage*.25)*100);
  const missing=[...new Set([...lt.unavailable,...st.unavailable,...r.unavailable,...(lt.valuation.score==null?["Valuation"]:[])])];
  const criticalMissing=missing.filter(x=>["Growth quality","Profitability / capital efficiency","Balance-sheet resilience","Cash-flow quality","Asset quality / capital adequacy / provisioning"].includes(x)).length;
- const confidence=round(clamp(completeness*(criticalMissing?0.75:1)));
+ const confidence=round(clamp(completeness*(criticalMissing?0.75:1)-(missing.includes("Historical earnings consistency / margin trend")?10:0)));
  return {
   engine_version:ENGINE_VERSION,
   long_term_score:lt.score,
@@ -90,16 +99,17 @@ export function scoreStock({fundamentals,peers=[],technical,regime="NEUTRAL",sec
   risk_score:r.score,
   risk_label:riskLabel(r.score),
   valuation_score:lt.valuation.score,
-  final_ai_score:investmentScore,
-  total_score:investmentScore,
+  final_ai_score,
+  total_score:final_ai_score,
   confidence,
   data_completeness:completeness,
   freshness_status:f?.updated_at?"AVAILABLE":"MISSING",
   unavailable_factors:missing,
   factor_breakdown:{long_term:lt.factors,short_term:st.factors,risk:r.factors,valuation:lt.valuation},
   valuation_analysis:lt.valuation,
-  labels:{long_term:scoreLabel(lt.score),short_term:st.score==null?"Unavailable":scoreLabel(st.score),risk:riskLabel(r.score),valuation:lt.valuation.status},
-  architecture:{long_term:"Primary investment quality score",short_term:"Separate market setup score",final:"LT Investment Score; ST is not blended into investment quality"},
-  eligibility:{all_core_scores_available:lt.score!=null&&st.score!=null&&r.score!=null&&lt.valuation.score!=null,missing_factors:missing,confidence,data_completeness:completeness},
+  labels:{long_term:scoreLabel(lt.score),short_term:st.score==null?"Unavailable":scoreLabel(st.score),risk:riskLabel(r.score),valuation:lt.valuation.status,final:scoreLabel(final_ai_score)},
+  architecture:{long_term:"Business and investment quality",short_term:"Current market setup",final:"50% LT + 25% ST + 15% Risk + 10% Valuation"},
+  weights,
+  eligibility:{all_core_scores_available:core.every(v=>v!=null),missing_factors:missing,confidence,data_completeness:completeness},
  };
 }
