@@ -24,12 +24,20 @@ function admin() {
   return createClient(URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
-function authorized(request) {
-  const secret = process.env.PIPELINE_SECRET;
-  if (!secret) return false;
+async function authorized(request) {
+  const secret = process.env.PIPELINE_SECRET || "";
   const header = request.headers.get("x-pipeline-secret") || "";
   const auth = request.headers.get("authorization") || "";
-  return header === secret || auth === `Bearer ${secret}`;
+  if (secret && (header === secret || auth === `Bearer ${secret}`)) return true;
+
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!bearer || !URL || !KEY) return false;
+  try {
+    const { data, error } = await admin().auth.getUser(bearer);
+    return !error && !!data?.user;
+  } catch {
+    return false;
+  }
 }
 
 function norm(value) {
@@ -67,7 +75,7 @@ async function marketRegimeFor(request) {
 }
 
 export async function GET(request) {
-  if (!authorized(request)) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  if (!(await authorized(request))) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 
   try {
     const supabase = admin();
