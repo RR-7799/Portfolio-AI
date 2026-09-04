@@ -10,6 +10,7 @@ const items = [
   { href: "/decisions", label: "Decisions" },
   { href: "/rebalance", label: "Rebalance" },
   { href: "/alerts", label: "Alerts" },
+  { href: "/banking-data", label: "Banking Audit" },
 ];
 
 export default function AppNavigation() {
