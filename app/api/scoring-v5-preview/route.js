@@ -53,11 +53,25 @@ async function technicalFor(request, isin) {
   return body?.technical || { available: false, reason: "Technical response missing." };
 }
 
+async function marketRegimeFor(request) {
+  const origin = new URL(request.url).origin;
+  const response = await fetch(`${origin}/api/market-regime`, {
+    headers: { "x-pipeline-secret": process.env.PIPELINE_SECRET || "" },
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body?.success || !body?.regime?.label) {
+    throw new Error(body?.error || `Market regime failed (${response.status}).`);
+  }
+  return body.regime;
+}
+
 export async function GET(request) {
   if (!authorized(request)) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 
   try {
     const supabase = admin();
+    const marketRegime = await marketRegimeFor(request);
     const [{ data: instruments, error: instrumentsError }, { data: fundamentals, error: fundamentalsError }, { data: scores, error: scoresError }] = await Promise.all([
       supabase.from("instruments").select("*").limit(5000),
       supabase.from("fundamentals").select("*").limit(5000),
@@ -96,7 +110,7 @@ export async function GET(request) {
 
       try {
         const technical = await technicalFor(request, instrument.isin);
-        const scored = scoreStock({ fundamentals: fundamentalsRow, peers, technical, regime: "NEUTRAL", sector });
+        const scored = scoreStock({ fundamentals: fundamentalsRow, peers, technical, regime: marketRegime.label, sector });
         results.push({
           company: instrument.company_name || instrument.name || target.label,
           symbol: instrument.symbol || null,
@@ -105,7 +119,7 @@ export async function GET(request) {
           peer_count: peers.length,
           legacy_total_score: legacyByInstrument.get(instrumentId) ?? null,
           ...scored,
-          regime_used: "NEUTRAL",
+          regime_used: marketRegime.label,
         });
       } catch (error) {
         results.push({ company: instrument.company_name || target.label, instrument_id: instrumentId, sector, error: error?.message || "Scoring failed." });
@@ -117,6 +131,7 @@ export async function GET(request) {
       engine_version: ENGINE_VERSION,
       dry_run: true,
       writes_performed: false,
+      market_regime: marketRegime,
       targets: TARGETS.map(x => x.label),
       results,
       generated_at: new Date().toISOString(),
