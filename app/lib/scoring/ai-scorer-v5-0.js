@@ -33,13 +33,9 @@ function percentile(value, peers, higherIsBetter = true) {
   return clamp(higherIsBetter ? p : 100 - p);
 }
 
-function qualityFromPercentile(value, peers, higherIsBetter = true) {
-  const p = percentile(value, peers, higherIsBetter);
-  return p == null ? null : p;
-}
-
 function metricScore(value, peers, higherIsBetter = true, neutral = 50) {
-  return qualityFromPercentile(value, peers, higherIsBetter) ?? (value == null ? null : neutral);
+  const p = percentile(value, peers, higherIsBetter);
+  return p == null ? (value == null ? null : neutral) : p;
 }
 
 function growth(f, peers) {
@@ -59,7 +55,9 @@ function profitability(f, peers, sector) {
 
 function balanceSheet(f, peers, sector) {
   if (sector === "BANKING" || sector === "NBFC") {
-    return metricScore(f.roe, peers.map(x => x.roe), true);
+    // GNPA/NNPA/capital adequacy/credit growth/provisioning are not present in the
+    // current fundamentals schema. Never substitute ROE for balance-sheet quality.
+    return null;
   }
   return metricScore(f.debt_to_equity, peers.map(x => x.debt_to_equity), false);
 }
@@ -125,8 +123,11 @@ function shortTerm(technical, regime) {
 
 function risk(f, peers, technical, sector) {
   const factors = [];
-  if (sector === "BANKING" || sector === "NBFC") factors.push(["Profitability resilience", metricScore(f.roe, peers.map(x => x.roe), true), 40]);
-  else factors.push(["Leverage resilience", metricScore(f.debt_to_equity, peers.map(x => x.debt_to_equity), false), 35]);
+  if (sector === "BANKING" || sector === "NBFC") {
+    factors.push(["Financial resilience", metricScore(f.roe, peers.map(x => x.roe), true), 40]);
+  } else {
+    factors.push(["Leverage resilience", metricScore(f.debt_to_equity, peers.map(x => x.debt_to_equity), false), 35]);
+  }
   factors.push(["Cash-flow resilience", cashFlow(f, peers), 30]);
   factors.push(["Profitability resilience", profitability(f, peers, sector), 20]);
   const vol = technical?.available ? num(technical.volatility?.annualized_20d_pct) : null;
