@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const money = v => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(v || 0));
 const pct = v => Number(v || 0).toFixed(1) + "%";
 function Badge({ children }) { const x = String(children || "").toUpperCase(); const cls = x === "HIGH" ? "reduce" : x === "MEDIUM" ? "watch" : "hold"; return <span className={`badge ${cls}`}>{children}</span>; }
@@ -17,10 +15,7 @@ export default function HealthPage() {
   async function load() {
     setLoading(true); setError("");
     try {
-      const { data: auth } = await supabase.auth.getSession();
-      const token = auth.session?.access_token;
-      if (!token) throw new Error("Authentication required. Please sign in on the main dashboard.");
-      const r = await fetch("/api/portfolio-health", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      const r = await fetch("/api/portfolio-health", { cache: "no-store" });
       const b = await r.json();
       if (!r.ok || !b.success) throw new Error(b.error || "Unable to load portfolio health.");
       setData(b);
@@ -57,7 +52,7 @@ export default function HealthPage() {
       </div></div>
     </section>
 
-    <section className="card"><h2>Largest positions</h2><div style={{overflowX:"auto"}}><table><thead><tr><th>Company</th><th>Weight</th><th>Score</th><th>Risk</th><th>Freshness</th><th>Model action</th></tr></thead><tbody>{data.holdings.slice(0,15).map(r=><tr key={r.id}><td><strong>{r.company_name}</strong><small>{r.symbol}</small></td><td>{pct(r.weight)}<small>{money(r.current_value)}</small></td><td>{r.final_ai_score == null ? "—" : Number(r.final_ai_score).toFixed(1)}</td><td><Badge>{r.risk}</Badge></td><td>{r.freshness}</td><td>{r.action}</td></tr>)}</tbody></table></div></section>
+    <section className="card"><h2>Largest positions</h2><div style={{overflowX:"auto"}}><table><thead><tr><th>Company</th><th>Weight</th><th>Score</th><th>Risk</th><th>Freshness</th><th>Model action</th></tr></thead><tbody>{data.holdings.slice(0,15).map(r=><tr key={r.id}><td><strong>{r.company_name}</strong><small>{r.symbol}</small></td><td>{pct(r.weight)}<small>{money(r.current_value)}</small></td><td>{r.score == null ? "—" : Number(r.score).toFixed(1)}</td><td><Badge>{r.risk}</Badge></td><td>{r.freshness}</td><td>{r.action}</td></tr>)}</tbody></table></div></section>
 
     <section className="card"><h2>How to use this screen</h2><p>HIGH alerts deserve review first. Concentration alerts tell you when a position or sector has become too large. Data alerts reduce conviction when fundamentals are stale or missing. Health score is a model diagnostic, not a guarantee of returns.</p></section>
   </main>;
