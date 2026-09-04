@@ -6,7 +6,7 @@ import { normalizeSector } from "../../lib/scoring/sector-normalization";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ENGINE_VERSION = "ai_scorer_v5_0_preview";
 const TARGETS = [
@@ -20,8 +20,8 @@ const TARGETS = [
 ];
 
 function admin() {
-  if (!URL || !KEY) throw new Error("Supabase service configuration is missing.");
-  return createClient(URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
+  if (!SUPABASE_URL || !KEY) throw new Error("Supabase service configuration is missing.");
+  return createClient(SUPABASE_URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
 async function authorized(request) {
@@ -31,7 +31,7 @@ async function authorized(request) {
   if (secret && (header === secret || auth === `Bearer ${secret}`)) return true;
 
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!bearer || !URL || !KEY) return false;
+  if (!bearer || !SUPABASE_URL || !KEY) return false;
   try {
     const { data, error } = await admin().auth.getUser(bearer);
     return !error && !!data?.user;
@@ -51,7 +51,7 @@ function matchesTarget(row, target) {
 
 async function technicalFor(request, isin) {
   if (!isin) return { available: false, reason: "Missing ISIN." };
-  const origin = new URL(request.url).origin;
+  const origin = new globalThis.URL(request.url).origin;
   const response = await fetch(`${origin}/api/market-intelligence?isin=${encodeURIComponent(isin)}&days=365`, {
     headers: { "x-pipeline-secret": process.env.PIPELINE_SECRET || "" },
     cache: "no-store",
@@ -62,7 +62,7 @@ async function technicalFor(request, isin) {
 }
 
 async function marketRegimeFor(request) {
-  const origin = new URL(request.url).origin;
+  const origin = new globalThis.URL(request.url).origin;
   const response = await fetch(`${origin}/api/market-regime`, {
     headers: { "x-pipeline-secret": process.env.PIPELINE_SECRET || "" },
     cache: "no-store",
