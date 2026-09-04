@@ -81,24 +81,57 @@ const BANKING_TERMS = [
   "Provision for Bad and Doubtful Debts", "Provisions and Contingencies"
 ];
 
+const KEY_RATIOS = ["P/E", "P/B", "ROA", "ROE", "ROCE", "EV/EBITDA"];
+
+function ratioValue(value) {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  const numeric = Number.parseFloat(text.replace(/,/g, ""));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeKeyRatios(body) {
+  const rows = Array.isArray(body?.data) ? body.data : [];
+  return rows.map(row => ({
+    name: String(row?.name || ""),
+    company_value: row?.company_value ?? null,
+    sector_value: row?.sector_value ?? null,
+    company_numeric: ratioValue(row?.company_value),
+    sector_numeric: ratioValue(row?.sector_value),
+  })).filter(row => row.name);
+}
+
 export async function GET(request) {
   if (!(await authorized(request))) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   try {
     const results = [];
     for (const target of TARGETS) {
-      const response = await fetchUpstox(`/fundamentals/${encodeURIComponent(target.isin)}/balance-sheet?type=consolidated&fs=true`);
-      const fullStatement = response.body?.data?.full_statement || [];
+      const [balance, ratios] = await Promise.all([
+        fetchUpstox(`/fundamentals/${encodeURIComponent(target.isin)}/balance-sheet?type=consolidated&fs=true`),
+        fetchUpstox(`/fundamentals/${encodeURIComponent(target.isin)}/key-ratios`),
+      ]);
+      const fullStatement = balance.body?.data?.full_statement || [];
       results.push({
         company: target.label,
         isin: target.isin,
-        ok: response.ok,
-        status: response.status,
-        periods: response.body?.data?.history?.map(x => x.period) || [],
+        ok: balance.ok && ratios.ok,
+        status: balance.status,
+        balance_sheet_status: balance.status,
+        key_ratios_status: ratios.status,
+        periods: balance.body?.data?.history?.map(x => x.period) || [],
         available_line_items: [...new Set(collectLabels(fullStatement))],
         candidate_banking_items: extractHistory(fullStatement, BANKING_TERMS),
+        key_ratios: normalizeKeyRatios(ratios.body),
       });
     }
-    return NextResponse.json({ success: true, dry_run: true, writes_performed: false, purpose: "Discover verified banking-specific fields exposed by Upstox before changing the database or scorer.", results });
+    return NextResponse.json({
+      success: true,
+      dry_run: true,
+      writes_performed: false,
+      purpose: "Discover verified banking-specific fields exposed by Upstox before changing the database or scorer.",
+      key_ratio_definition: "Each returned ratio contains the company's current value and the provider's sector benchmark; no derived score is written.",
+      results,
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error?.message || "Banking data discovery failed." }, { status: 500 });
   }
