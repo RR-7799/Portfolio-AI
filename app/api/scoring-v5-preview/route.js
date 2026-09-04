@@ -10,13 +10,13 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ENGINE_VERSION = "ai_scorer_v5_0_preview";
 const TARGETS = [
-  "BIOCON",
-  "PRAJ INDUSTRIES",
-  "INDUSIND BANK",
-  "LAURUS LABS",
-  "BHARAT ELECTRONICS",
-  "GARDEN REACH SHIPBUILDERS",
-  "MOTHERSON SUMI WIRING",
+  { label: "BIOCON", aliases: ["BIOCON"] },
+  { label: "PRAJ INDUSTRIES", aliases: ["PRAJ INDUSTRIES", "PRAJ INDUSTRIES LTD"] },
+  { label: "INDUSIND BANK", aliases: ["INDUSIND BANK", "INDUSIND BANK LIMITED"] },
+  { label: "LAURUS LABS", aliases: ["LAURUS LABS", "LAURUS LABS LIMITED"] },
+  { label: "BHARAT ELECTRONICS", aliases: ["BHARAT ELECTRONICS", "BHARAT ELECTRONICS LTD"] },
+  { label: "GARDEN REACH SHIPBUILDERS", aliases: ["GARDEN REACH SHIPBUILDERS", "GARDEN REACH SHIP&ENG LTD"] },
+  { label: "MOTHERSON SUMI WIRING", aliases: ["MOTHERSON SUMI WIRING", "MOTHERSON SUMI WRNG IND L"] },
 ];
 
 function admin() {
@@ -37,9 +37,8 @@ function norm(value) {
 }
 
 function matchesTarget(row, target) {
-  const values = [row?.symbol, row?.company_name, row?.name, row?.trading_symbol].map(norm).filter(Boolean);
-  const t = norm(target);
-  return values.some(v => v === t || v.includes(t) || t.includes(v));
+  const values = [row?.symbol, row?.company_name, row?.name].map(norm).filter(Boolean);
+  return target.aliases.map(norm).some(t => values.some(v => v === t || v.includes(t) || t.includes(v)));
 }
 
 async function technicalFor(request, isin) {
@@ -77,30 +76,30 @@ export async function GET(request) {
     for (const target of TARGETS) {
       const instrument = (instruments || []).find(x => matchesTarget(x, target));
       if (!instrument) {
-        results.push({ company: target, error: "Instrument not found in database." });
+        results.push({ company: target.label, error: "Instrument not found in database." });
         continue;
       }
 
       const instrumentId = instrument.id || instrument.instrument_id;
       const fundamentalsRow = fundByInstrument.get(instrumentId);
       if (!fundamentalsRow) {
-        results.push({ company: instrument.company_name || target, error: "Fundamentals not found in database." });
+        results.push({ company: instrument.company_name || target.label, error: "Fundamentals not found in database." });
         continue;
       }
 
-      const rawSector = instrument.sector || instrument.industry || fundamentalsRow.sector || "OTHER";
+      const rawSector = instrument.sector || fundamentalsRow.sector || "OTHER";
       const sector = normalizeSector(rawSector);
       const peers = allFundamentals.filter(f => {
         const peerInstrument = byInstrument.get(f.instrument_id);
-        return peerInstrument && normalizeSector(peerInstrument.sector || peerInstrument.industry || "OTHER") === sector;
+        return peerInstrument && normalizeSector(peerInstrument.sector || "OTHER") === sector;
       });
 
       try {
         const technical = await technicalFor(request, instrument.isin);
         const scored = scoreStock({ fundamentals: fundamentalsRow, peers, technical, regime: "NEUTRAL", sector });
         results.push({
-          company: instrument.company_name || instrument.name || target,
-          symbol: instrument.symbol || instrument.trading_symbol || null,
+          company: instrument.company_name || instrument.name || target.label,
+          symbol: instrument.symbol || null,
           instrument_id: instrumentId,
           sector,
           peer_count: peers.length,
@@ -109,7 +108,7 @@ export async function GET(request) {
           regime_used: "NEUTRAL",
         });
       } catch (error) {
-        results.push({ company: instrument.company_name || target, instrument_id: instrumentId, sector, error: error?.message || "Scoring failed." });
+        results.push({ company: instrument.company_name || target.label, instrument_id: instrumentId, sector, error: error?.message || "Scoring failed." });
       }
     }
 
@@ -118,7 +117,7 @@ export async function GET(request) {
       engine_version: ENGINE_VERSION,
       dry_run: true,
       writes_performed: false,
-      targets: TARGETS,
+      targets: TARGETS.map(x => x.label),
       results,
       generated_at: new Date().toISOString(),
     });
