@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic="force-dynamic";
-const ENGINE_VERSION="decision_engine_v5_2";
+const ENGINE_VERSION="decision_engine_v5_3";
 const admin=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{autoRefreshToken:false,persistSession:false}});
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:null;};
 const up=v=>String(v||"").toUpperCase();
@@ -17,16 +17,16 @@ function decide(x){
  const highRisk=risk!=null&&risk<55;
  const concentrated=weight!=null&&weight>=12;
  const severeDowntrend=st!=null&&st<35;
- const weakLongTerm=lt!=null&&lt<50;
- const moderateLongTerm=lt!=null&&lt>=50&&lt<70;
+ const brokenLongTerm=lt!=null&&lt<50;
+ const weakLongTerm=lt!=null&&lt<70;
  const strongLongTerm=lt!=null&&lt>=80;
  const goodLongTerm=lt!=null&&lt>=70;
  const strongSetup=st!=null&&st>=80;
  const weakSetup=st!=null&&st<50;
  if(!reliable)return{action:"WATCH",reason:"Data completeness, freshness or confidence is insufficient for a high-conviction portfolio action.",conviction:"LOW"};
- if(weakLongTerm||severeRisk)return{action:"EXIT",reason:weakLongTerm?"Long-term investment quality is below the minimum thesis threshold; the position should not be treated as a core holding.":"Independent risk is severe enough that the current risk/reward is structurally unacceptable.",conviction:"HIGH"};
- if(concentrated||highRisk&&lt<70||final!=null&&final<60)return{action:"REDUCE",reason:concentrated?"Position concentration is too high for the current conviction and should be brought down.":highRisk?"Independent risk has deteriorated enough to reduce capital allocation.":"The combined evidence is below the minimum level for maintaining the current allocation.",conviction:"HIGH"};
- if(moderateLongTerm&&strongSetup)return{action:"SHORT-TERM OPPORTUNITY / NOT A CORE BUY",reason:"The current setup is strong, but long-term quality is below the core-investment threshold; treat this as a tactical opportunity rather than a core buy.",conviction:"MEDIUM"};
+ if(brokenLongTerm||severeRisk)return{action:"EXIT",reason:brokenLongTerm?"Long-term investment quality is below the minimum thesis threshold; the position should not be treated as a core holding.":"Independent risk is severe enough that the current risk/reward is structurally unacceptable.",conviction:"HIGH"};
+ if(weakLongTerm||final!=null&&final<60||highRisk||concentrated)return{action:"REDUCE",reason:weakLongTerm?"Long-term investment quality is below the hold threshold; capital allocation should be reduced unless the thesis strengthens.":highRisk?"Independent risk has deteriorated enough to reduce capital allocation.":concentrated?"Position concentration is too high for the current conviction and should be brought down.":"The combined evidence is below the minimum level for maintaining the current allocation.",conviction:"HIGH"};
+ if(lt!=null&&lt>=50&&lt<70&&strongSetup)return{action:"SHORT-TERM OPPORTUNITY / NOT A CORE BUY",reason:"The current setup is strong, but long-term quality is below the core-investment threshold; treat this as a tactical opportunity rather than a core buy.",conviction:"MEDIUM"};
  if(goodLongTerm&&weakSetup)return{action:"HOLD / WAIT FOR BETTER ENTRY",reason:"The long-term thesis is intact, but short-term conditions are weak; do not confuse business quality with entry timing.",conviction:"HIGH"};
  if(strongLongTerm&&st!=null&&!severeDowntrend&&risk>=55&&val>=45&&!concentrated&&regime!=="BEAR"&&final!=null&&final>=85)return{action:"BUY",reason:"Long-term quality is very strong and the current setup, risk, valuation, confidence and portfolio concentration all clear the buy gate.",conviction:"HIGH"};
  if(strongLongTerm&&strongSetup&&risk>=55&&val>=45&&!concentrated&&regime!=="BEAR")return{action:"ACCUMULATE",reason:"Strong long-term quality and strong current setup support adding capital within portfolio risk and valuation limits.",conviction:"HIGH"};
@@ -49,4 +49,4 @@ async function buildForUser(client,userId){
  const rank={EXIT:0,REDUCE:1,"SHORT-TERM OPPORTUNITY / NOT A CORE BUY":2,"HOLD / WAIT FOR BETTER ENTRY":3,"HOLD / WAIT":4,WATCH:5,HOLD:6,ACCUMULATE:7,BUY:8};results.sort((a,b)=>(rank[a.decision]??99)-(rank[b.decision]??99)||(b.confidence||0)-(a.confidence||0));return{user_id:userId,market_regime:regime,portfolio_value:total,decisions:results};
 }
 async function persist(decisions,userId){let updated=0;for(const item of decisions||[]){if(!item.instrument_id||!item.decision)continue;const{error}=await admin.from("ai_scores").update({action:item.decision,updated_at:new Date().toISOString()}).eq("instrument_id",item.instrument_id).eq("user_id",userId);if(error)throw new Error(`Decision persistence failed for ${item.company_name||item.instrument_id}: ${error.message}`);updated++;}return updated;}
-export async function GET(request){try{const token=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});const{data:u,error:ue}=await admin.auth.getUser(token);if(ue||!u?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});const client=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}}),portfolio=await buildForUser(client,u.user.id),persisted=await persist(portfolio.decisions,u.user.id),decision_counts={};for(const x of portfolio.decisions)decision_counts[x.decision]=(decision_counts[x.decision]||0)+1;return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts,persisted_actions:persisted});}catch(error){console.error("Decision engine v5.2 error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});}}
+export async function GET(request){try{const token=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Authentication required."},{status:401});const{data:u,error:ue}=await admin.auth.getUser(token);if(ue||!u?.user)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Invalid session."},{status:401});const client=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{global:{headers:{Authorization:`Bearer ${token}`}}}),portfolio=await buildForUser(client,u.user.id),persisted=await persist(portfolio.decisions,u.user.id),decision_counts={};for(const x of portfolio.decisions)decision_counts[x.decision]=(decision_counts[x.decision]||0)+1;return NextResponse.json({success:true,engine_version:ENGINE_VERSION,generated_at:new Date().toISOString(),...portfolio,decision_counts,persisted_actions:persisted});}catch(error){console.error("Decision engine v5.3 error:",error);return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Decision engine failed."},{status:500});}}
