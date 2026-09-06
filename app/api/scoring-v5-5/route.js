@@ -168,7 +168,15 @@ export async function GET(request) {
       const instrument = im.get(instrumentId);
       const f = fm.get(instrumentId);
       if (!instrument || !f) {
-        results.push({ instrument_id: instrumentId, success: false, error: !instrument ? "Instrument not found" : "Fundamentals not found" });
+        results.push({
+          instrument_id: instrumentId,
+          symbol: instrument?.symbol || null,
+          company: instrument?.company_name || null,
+          success: true,
+          scored: false,
+          data_status: !instrument ? "LIMITED" : "LIMITED",
+          unavailable_reasons: [!instrument ? "Instrument not found" : "Fundamentals not found; full V5.5 equity scoring skipped for this instrument."],
+        });
         continue;
       }
       try {
@@ -194,7 +202,7 @@ export async function GET(request) {
           history: hm.get(instrumentId) || [],
           bankingRatios,
         });
-        results.push({ instrument_id: instrumentId, symbol: instrument.symbol, company: instrument.company_name, success: true, final_ai_score: record.final_ai_score, score_version: record.score_version, technical_status: technical?.status || "MISSING" });
+        results.push({ instrument_id: instrumentId, symbol: instrument.symbol, company: instrument.company_name, success: true, scored: Number.isFinite(Number(record.final_ai_score)), final_ai_score: record.final_ai_score, score_version: record.score_version, technical_status: technical?.status || "MISSING" });
 
         const calculatedAt = new Date().toISOString();
         const rows = [];
@@ -253,8 +261,9 @@ export async function GET(request) {
       }
     }
 
-    const successful = results.filter(x => x.success);
+    const successful = results.filter(x => x.success && x.scored !== false);
     const failed = results.filter(x => !x.success);
+    const limited = results.filter(x => x.success && x.scored === false);
     const finals = successful.map(x => Number(x.final_ai_score)).filter(Number.isFinite);
     return NextResponse.json({
       success: failed.length === 0,
@@ -265,7 +274,8 @@ export async function GET(request) {
       market_regime: regime.regime,
       summary: {
         holdings_scored: successful.length,
-        scored: successful.length,
+        scored: finals.length,
+        limited: limited.length,
         failed: failed.length,
         history_stored: successful.length * userIds.length,
         average_final_ai_score: finals.length ? Number((finals.reduce((a, x) => a + x, 0) / finals.length).toFixed(1)) : null,
