@@ -157,7 +157,7 @@ export async function GET(request) {
     const instrumentIds = [...new Set([...pairs.values()].map(x => x.instrument_id))];
     const userIds = [...new Set([...pairs.values()].map(x => x.user_id))];
     const existingQuery = instrumentIds.length && userIds.length
-      ? db.from("ai_scores").select("id,user_id,instrument_id").in("instrument_id", instrumentIds).in("user_id", userIds)
+      ? db.from("ai_scores").select("id,user_id,instrument_id").in("instrument_id", instrumentIds).in("user_id", userIds).eq("score_version", SCORER_VERSION)
       : Promise.resolve({ data: [], error: null });
     const { data: existing, error: existingError } = await existingQuery;
     if (existingError) throw existingError;
@@ -174,7 +174,7 @@ export async function GET(request) {
           company: instrument?.company_name || null,
           success: true,
           scored: false,
-          data_status: !instrument ? "LIMITED" : "LIMITED",
+          data_status: "LIMITED",
           unavailable_reasons: [!instrument ? "Instrument not found" : "Fundamentals not found; full V5.5 equity scoring skipped for this instrument."],
         });
         continue;
@@ -205,7 +205,6 @@ export async function GET(request) {
         results.push({ instrument_id: instrumentId, symbol: instrument.symbol, company: instrument.company_name, success: true, scored: Number.isFinite(Number(record.final_ai_score)), final_ai_score: record.final_ai_score, score_version: record.score_version, technical_status: technical?.status || "MISSING" });
 
         const calculatedAt = new Date().toISOString();
-        const rows = [];
         for (const pair of pairs.values()) {
           if (pair.instrument_id !== instrumentId) continue;
           const key = `${pair.user_id}:${instrumentId}`;
@@ -231,7 +230,7 @@ export async function GET(request) {
           };
           const prior = existingMap.get(key);
           if (prior) {
-            const { error } = await db.from("ai_scores").update(payload).eq("id", prior.id).eq("user_id", pair.user_id);
+            const { error } = await db.from("ai_scores").update(payload).eq("id", prior.id).eq("user_id", pair.user_id).eq("score_version", SCORER_VERSION);
             if (error) throw error;
           } else {
             const { error } = await db.from("ai_scores").insert({ ...payload, user_id: pair.user_id, instrument_id: instrumentId });
@@ -277,7 +276,7 @@ export async function GET(request) {
         scored: finals.length,
         limited: limited.length,
         failed: failed.length,
-        history_stored: successful.length * userIds.length,
+        history_stored: successful.length * pairs.size,
         average_final_ai_score: finals.length ? Number((finals.reduce((a, x) => a + x, 0) / finals.length).toFixed(1)) : null,
       },
       results,
