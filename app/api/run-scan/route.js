@@ -45,7 +45,7 @@ export async function POST(request) {
     const pipelineWarning = alertOnlyFailure ? pipelinePayload?.stages?.find(stage => stage.stage === "portfolio_alerts")?.data?.error || pipelinePayload?.error || "Alert stage failed; scan continued without blocking portfolio decisions." : pipelinePayload?.pipeline_summary?.alerts_warning || null;
     const decisionResponse = await runDecisionEngine(new Request(`${origin}/api/decision-engine`, { method: "GET", headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }));
     const decisionPayload = await parseJsonResponse(decisionResponse);
-    if (!decisionResponse.ok || !decisionPayload?.success) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, failed_stage: "decision_engine_v5_3", error: decisionPayload?.error || "Decision engine failed after scan.", pipeline: pipelinePayload, decision_engine: decisionPayload }, { status: decisionResponse.status || 502 });
+    if (!decisionResponse.ok || !decisionPayload?.success) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, failed_stage: "decision_engine_v5_4", error: decisionPayload?.error || "Decision engine failed after scan.", pipeline: pipelinePayload, decision_engine: decisionPayload }, { status: decisionResponse.status || 502 });
     const coverage = await getCoverage(data.user.id);
     const baseSummary = pipelinePayload.pipeline_summary || {};
     const decisionCounts = decisionPayload.decision_counts || {};
