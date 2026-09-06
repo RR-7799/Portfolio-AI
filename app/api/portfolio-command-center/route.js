@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_command_center_v2_1";
+const ENGINE_VERSION = "portfolio_command_center_v2_2";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const up = (v) => String(v || "").toUpperCase();
@@ -12,15 +12,14 @@ function userClient(token) {
 }
 
 function decision(row, weight) {
-  const lt = n(row.long_term_score), risk = n(row.risk_score), val = n(row.valuation_score);
+  const lt = n(row.long_term_score), risk = n(row.risk_score);
   const confidence = n(row.confidence), completeness = n(row.data_completeness);
   const fresh = up(row.freshness_status);
   if (lt == null || confidence == null || confidence < 60 || completeness == null || completeness < 60 || !fresh || ["MISSING", "STALE", "VERY_STALE"].includes(fresh)) return ["WATCH", 1, "V5.5 data quality is insufficient for a reliable thesis decision."];
   if (risk != null && risk < 25) return ["EXIT", 0, "Severe risk is a safety override."];
   if (lt < 50) return ["EXIT", 0, "Long-Term Score is below the core-investment threshold."];
   if (lt < 70) return ["REDUCE", 0, "Long-Term Score is below the core-investment threshold."];
-  if (lt < 80) return ["HOLD", 3, "Long-term thesis remains constructive; current conditions do not justify aggressive adding."];
-  if (weight >= 12 && ((risk != null && risk < 55) || (val != null && val < 35))) return ["REDUCE", 0, "Concentration is too high for the current risk/reward."];
+  if (lt < 80) return ["HOLD", 3, "Long-Term thesis remains constructive; current conditions do not justify aggressive adding."];
   return ["BUY", 6, "Long-Term Score supports a core BUY thesis."];
 }
 
@@ -60,7 +59,7 @@ export async function GET(request) {
     rows.sort((a, b) => a.priority - b.priority || (b.long_term_score ?? 0) - (a.long_term_score ?? 0));
     return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, score_version: SCORE_VERSION, market_regime: regime, portfolio: { current_value: total, stock_count: rows.length }, summary: { core_quality: rows.filter(r => (r.long_term_score ?? 0) >= 70).length, buy: rows.filter(r => r.action === "BUY").length, hold: rows.filter(r => r.action === "HOLD").length, watch: rows.filter(r => r.action === "WATCH").length, reduce: rows.filter(r => r.action === "REDUCE").length, exit: rows.filter(r => r.action === "EXIT").length }, ranking: rows });
   } catch (error) {
-    console.error("Command center v2.1 error:", error);
+    console.error("Command center v2.2 error:", error);
     return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Command center failed." }, { status: 500 });
   }
 }
