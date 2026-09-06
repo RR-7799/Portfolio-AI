@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "rebalance_v1_2";
+const ENGINE_VERSION = "rebalance_v1_3";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = x => { const v = Number(x); return Number.isFinite(v) ? v : null; };
 const clamp = (x,a,b) => Math.max(a,Math.min(b,x));
@@ -67,13 +67,13 @@ export async function GET(request) {
     }).sort((a,b)=>(b.difference??-Infinity)-(a.difference??-Infinity));
     const deployable = Math.max(totalValue,0);
     const actions = rows.map(r => {
-      if (r.target_weight == null) return {...r,action_plan:"WATCH",estimated_rupees:0};
+      if (r.target_weight == null || r.action === "WATCH") return {...r,action_plan:"WATCH",estimated_rupees:0};
       const delta = deployable*(r.difference/100);
       let actionPlan = "HOLD";
       if (r.action === "EXIT" && r.current_weight > 0.5) actionPlan = "TRIM/EXIT";
-      else if (r.action === "REDUCE" && r.difference < -0.5) actionPlan = "TRIM";
-      else if (r.difference > 1.5) actionPlan = "ADD";
-      else if (r.difference < -2) actionPlan = "TRIM";
+      else if (r.action === "REDUCE") actionPlan = r.difference < -0.5 ? "TRIM" : "HOLD";
+      else if (r.action === "BUY" && r.difference > 1.5) actionPlan = "ADD";
+      else if (r.action === "BUY" && r.difference < -2) actionPlan = "TRIM";
       return {...r,action_plan:actionPlan,estimated_rupees:Number(Math.abs(delta).toFixed(0))};
     });
     const warnings = [];
