@@ -19,6 +19,7 @@ export function middleware(request) {
     "/api/score-portfolio",
     "/api/score-portfolio-safe",
     "/api/score-portfolio-safe-v42",
+    "/api/score-diagnostics",
   ];
   if (protectedPaths.includes(path)) {
     if (!hasPipelineSecret(request)) {
@@ -38,5 +39,6 @@ export const config = {
     "/api/score-portfolio",
     "/api/score-portfolio-safe",
     "/api/score-portfolio-safe-v42",
+    "/api/score-diagnostics",
   ],
 };
