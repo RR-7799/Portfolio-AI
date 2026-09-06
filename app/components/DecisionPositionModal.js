@@ -53,6 +53,8 @@ export default function DecisionPositionModal({ instrumentId, onClose }) {
 
   if (!instrumentId) return null;
   const scoreData = data?.score || {};
+  const scoreView = data?.scores || {};
+  const decision = data?.decision || {};
   const holding = data?.holding || {};
   const instrument = data?.instrument || {};
 
@@ -73,19 +75,20 @@ export default function DecisionPositionModal({ instrumentId, onClose }) {
 
         {!loading && !error && data && <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 12, marginTop: 24 }}>
-            <div className="card"><span className="label">LONG-TERM</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreData.long_term_score)}</div><strong>{scoreData.long_term_grade || scoreData.rating || "—"}</strong></div>
-            <div className="card"><span className="label">SHORT-TERM</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreData.short_term_score)}</div><strong>{scoreData.short_term_grade || "—"}</strong></div>
-            <div className="card"><span className="label">RISK</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreData.risk_score)}</div><strong>{scoreData.risk_level || "—"}</strong></div>
-            <div className="card"><span className="label">VALUATION</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreData.valuation_score)}</div><strong>{scoreData.valuation_grade || "—"}</strong></div>
+            <div className="card"><span className="label">LONG-TERM</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreView.long_term)}</div><strong>{scoreView.long_term_grade || scoreData.rating || "—"}</strong></div>
+            <div className="card"><span className="label">SHORT-TERM</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreView.short_term)}</div><strong>{scoreView.short_term_grade || "—"}</strong></div>
+            <div className="card"><span className="label">RISK</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreView.risk)}</div><strong>{scoreView.risk_level || "—"}</strong></div>
+            <div className="card"><span className="label">VALUATION</span><div style={{ fontSize: 30, fontWeight: 800 }}>{score(scoreView.valuation)}</div><strong>{scoreView.valuation_grade || "—"}</strong></div>
           </div>
 
           <div className="card" style={{ marginTop: 14 }}>
             <span className="label">FINAL DECISION</span>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 6 }}>
-              <div style={{ fontSize: 32, fontWeight: 800 }}>{score(scoreData.final_ai_score ?? scoreData.total_score)}</div>
-              <div style={{ fontWeight: 800 }} className={scoreClass(scoreData.action)}>{scoreData.action || "WATCH"}</div>
+              <div style={{ fontSize: 32, fontWeight: 800 }}>{score(scoreView.final)}</div>
+              <div style={{ fontWeight: 800 }} className={scoreClass(decision.action)}>{decision.action || "WATCH"}</div>
             </div>
-            <p style={{ margin: "6px 0 0", lineHeight: 1.45 }}>{scoreData.ai_summary || "The engine has not generated a detailed summary for this position yet."}</p>
+            <p style={{ margin: "6px 0 0", lineHeight: 1.45 }}>{decision.reason || scoreData.ai_summary || "The engine has not generated a detailed summary for this position yet."}</p>
+            <small style={{ display: "block", marginTop: 8, opacity: .6 }}>Action source: {decision.source || "V5.5 decision engine"} · Final AI Score is diagnostic, not the thesis action.</small>
           </div>
 
           <div className="card" style={{ marginTop: 14 }}>
@@ -98,7 +101,7 @@ export default function DecisionPositionModal({ instrumentId, onClose }) {
 
           <div style={{ marginTop: 22 }}>
             <div className="label">WHY THIS DECISION</div>
-            <p style={{ lineHeight: 1.55 }}>{scoreData.ai_summary || "No detailed rationale is available yet."}</p>
+            <p style={{ lineHeight: 1.55 }}>{decision.reason || scoreData.ai_summary || "No detailed rationale is available yet."}</p>
           </div>
 
           <div style={{ marginTop: 22 }}>
@@ -119,8 +122,10 @@ export default function DecisionPositionModal({ instrumentId, onClose }) {
           <div className="card" style={{ marginTop: 22 }}>
             <span className="label">DATA QUALITY</span>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
-              <div>Confidence<br /><strong>{scoreData.confidence == null ? "—" : `${Number(scoreData.confidence).toFixed(1)}%`}</strong></div>
-              <div>Freshness<br /><strong>{scoreData.freshness_status || "—"}</strong></div>
+              <div>Confidence<br /><strong>{scoreView.confidence == null ? "—" : `${Number(scoreView.confidence).toFixed(1)}%`}</strong></div>
+              <div>Completeness<br /><strong>{scoreView.data_completeness == null ? "—" : `${Number(scoreView.data_completeness).toFixed(1)}%`}</strong></div>
+              <div>Freshness<br /><strong>{scoreView.freshness_status || "—"}</strong></div>
+              <div>Score version<br /><strong>{scoreView.score_version || "—"}</strong></div>
             </div>
           </div>
         </>}
