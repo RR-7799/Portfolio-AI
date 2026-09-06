@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "regime_aware_allocation_v1_1";
+const ENGINE_VERSION = "regime_aware_allocation_v1_2";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -12,7 +12,7 @@ const up = (v) => String(v || "").toUpperCase();
 
 function riskCap(risk) {
   const r = up(risk);
-  return r === "HIGH" ? 4 : r === "MODERATE" ? 7 : 10;
+  return ["HIGH", "VERY HIGH", "CRITICAL"].includes(r) ? 4 : 10;
 }
 
 function baseTarget(longTermScore, risk) {
@@ -20,8 +20,8 @@ function baseTarget(longTermScore, risk) {
   if (s === null) return 0;
   let t = s >= 82 ? 8 : s >= 72 ? 6 : s >= 60 ? 4 : s >= 50 ? 2 : 0;
   const r = up(risk);
-  if (r === "HIGH") t *= 0.45;
-  else if (r === "MODERATE") t *= 0.8;
+  if (["HIGH", "VERY HIGH", "CRITICAL"].includes(r)) t *= 0.55;
+  else if (["MODERATE", "LOW-MODERATE"].includes(r)) t *= 0.85;
   return clamp(t, 0, riskCap(r));
 }
 
@@ -56,12 +56,12 @@ function opportunity(row, regime) {
   const confidence = num(row.confidence) ?? 0;
   const action = up(row.thesis_action);
   const positionPenalty = clamp((num(row.current_weight) ?? 0) / 12, 0, 1) * 18;
-  const riskPenalty = risk === "HIGH" ? 28 : risk === "MODERATE" ? 12 : 0;
+  const riskPenalty = ["HIGH", "VERY HIGH", "CRITICAL"].includes(risk) ? 28 : risk === "MODERATE" || risk === "LOW-MODERATE" ? 12 : 0;
   const freshnessPenalty = ["MISSING", "VERY_STALE", "STALE"].includes(fresh) ? 24 : fresh === "AGING" ? 10 : 0;
   const actionPenalty = action === "REDUCE" || action === "EXIT" ? 30 : action === "WATCH" ? 20 : 0;
   let x = score + confidence * 0.08 - positionPenalty - riskPenalty - freshnessPenalty - actionPenalty;
-  if (regime === "BEAR") x -= risk === "HIGH" ? 20 : 5;
-  if (regime === "NEUTRAL") x -= risk === "HIGH" ? 10 : 0;
+  if (regime === "BEAR") x -= ["HIGH", "VERY HIGH", "CRITICAL"].includes(risk) ? 20 : 5;
+  if (regime === "NEUTRAL") x -= ["HIGH", "VERY HIGH", "CRITICAL"].includes(risk) ? 10 : 0;
   return Number(clamp(x, 0, 100).toFixed(1));
 }
 
@@ -70,7 +70,7 @@ function reason(row, mode, eligible) {
     if (row.thesis_action === "EXIT" || row.thesis_action === "REDUCE") return `Long-Term thesis action is ${row.thesis_action}.`;
     if (["MISSING", "VERY_STALE", "STALE"].includes(up(row.freshness))) return "Fundamental data is too stale for new allocation.";
     if ((num(row.long_term_score) ?? 0) < mode.scoreFloor) return `Long-Term Score is below the ${mode.scoreFloor} regime hurdle.`;
-    if (up(row.risk_level) === "HIGH") return "High-risk position is restricted by the allocation guardrail.";
+    if (["HIGH", "VERY HIGH", "CRITICAL"].includes(up(row.risk_level))) return "High-risk position is restricted by the allocation guardrail.";
     if (row.thesis_action === "WATCH") return "V5.5 data is not reliable enough for a new allocation.";
     return "Does not clear the current capital-allocation rules.";
   }
@@ -135,7 +135,7 @@ export async function GET(request) {
       const freshness = up(score.freshness_status || "MISSING");
       const confidence = num(score.confidence) ?? 0;
       const lt = num(score.long_term_score);
-      const eligible = score.score_version === SCORE_VERSION && thesisAction === "BUY" && lt !== null && lt >= mode.scoreFloor && confidence >= (regime.label === "BEAR" ? 85 : 75) && risk !== "HIGH" && (!mode.freshRequired || ["FRESH", "ACCEPTABLE"].includes(freshness));
+      const eligible = score.score_version === SCORE_VERSION && thesisAction === "BUY" && lt !== null && lt >= mode.scoreFloor && confidence >= (regime.label === "BEAR" ? 85 : 75) && reliable(score) && !["HIGH", "VERY HIGH", "CRITICAL"].includes(risk) && (!mode.freshRequired || ["FRESH", "ACCEPTABLE"].includes(freshness));
       const base = baseTarget(lt, risk);
       const regimeTarget = base * (num(regime.position_target_multiplier) ?? mode.targetMultiplier);
       const targetWeight = Number(clamp(regimeTarget, 0, riskCap(risk)).toFixed(2));
@@ -153,7 +153,7 @@ export async function GET(request) {
     const warnings = [];
     if (regime.label === "BEAR") warnings.push("Bear regime: only a fraction of new cash is intentionally deployed.");
     if (reserveCash > 0) warnings.push(`Reserve ${Math.round(reserveCash).toLocaleString("en-IN")} of new cash for better conditions or entries.`);
-    const highRiskWeight = rows.filter(r => r.risk === "HIGH").reduce((s, r) => s + r.current_weight, 0);
+    const highRiskWeight = rows.filter(r => ["HIGH", "VERY HIGH", "CRITICAL"].includes(r.risk)).reduce((s, r) => s + r.current_weight, 0);
     if (highRiskWeight > 20) warnings.push(`HIGH-risk holdings already represent ${highRiskWeight.toFixed(1)}% of the portfolio.`);
 
     return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, score_version: SCORE_VERSION, regime: { label: regime.label, score: regime.score, confidence: regime.confidence, portfolio_mode: regime.portfolio_mode, buy_multiplier: regime.buy_multiplier, position_target_multiplier: regime.position_target_multiplier, guidance: regime.guidance }, portfolio: { current_stock_value: stockValue, new_cash: cash, total_value_after_cash: totalValueAfterCash, deployable_cash: Number(deployableCash.toFixed(0)), reserve_cash: Number(reserveCash.toFixed(0)), allocated_cash: allocated, unallocated_deployable: Number(Math.max(0, deployableCash - allocated).toFixed(0)) }, summary: { eligible: allocations.length, skipped: rows.filter(r => !r.eligible).length, total: rows.length }, allocations, ranking: rows.sort((a, b) => b.opportunity_score - a.opportunity_score), warnings, methodology: { score_version: SCORE_VERSION, decision_source: "Long-Term Score", score_floor: mode.scoreFloor, bear_deployment: 0.35, neutral_deployment: 0.7, bull_deployment: 1, risk_caps: { low: 10, moderate: 7, high: 4 }, note: "Regime-aware allocation is a heuristic decision aid, not an automatic trade order. Short-Term Score is informational timing context only." } });
