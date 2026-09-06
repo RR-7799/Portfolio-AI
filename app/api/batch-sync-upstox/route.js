@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "upstox_batch_v1_2";
+const ENGINE_VERSION = "upstox_batch_v1_3";
 const BATCH_CONCURRENCY = 5;
 
 function getSupabase() {
@@ -8,6 +8,14 @@ function getSupabase() {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) throw new Error("Missing Supabase environment variables");
   return createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+}
+
+function isAuthorized(request) {
+  const secret = process.env.PIPELINE_SECRET;
+  if (!secret) return false;
+  const header = request.headers.get("x-pipeline-secret");
+  const auth = request.headers.get("authorization") || "";
+  return header === secret || (auth.startsWith("Bearer ") && auth.slice(7) === secret);
 }
 
 function uniqueById(items) {
@@ -25,7 +33,7 @@ async function syncSingleInstrument(baseUrl, isin) {
   const url = `${baseUrl}/api/sync-upstox-fundamentals?isin=${encodeURIComponent(isin)}`;
   const startedAt = Date.now();
   try {
-    const response = await fetch(url, { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
+    const response = await fetch(url, { method: "GET", headers: { Accept: "application/json", "x-pipeline-secret": process.env.PIPELINE_SECRET || "" }, cache: "no-store" });
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { success: false, error: "Sync endpoint returned non-JSON response", raw_response: text.slice(0, 1000) }; }
@@ -81,6 +89,7 @@ async function mapWithConcurrency(items, concurrency, worker) {
 
 export async function GET(request) {
   const startedAt = Date.now();
+  if (!isAuthorized(request)) return Response.json({ success: false, engine_version: ENGINE_VERSION, error: process.env.PIPELINE_SECRET ? "Unauthorized" : "PIPELINE_SECRET is not configured" }, { status: 401 });
   try {
     const supabase = getSupabase();
     const { searchParams } = new URL(request.url);
