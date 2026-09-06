@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "final_decision_v4_0";
+const ENGINE_VERSION = "final_decision_v4_1";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = v => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const up = v => String(v || "").toUpperCase();
@@ -15,8 +15,8 @@ function timing(st,val,regime){
   if(st<50) return "WAIT";
   return "NEUTRAL TIMING";
 }
-function decide({lt,st,risk,val,regime}){
-  const reliable = true;
+function decide({lt,st,risk,val,confidence,completeness,freshness}){
+  const reliable = confidence!=null && confidence>=60 && completeness!=null && completeness>=60 && !["STALE","VERY_STALE","MISSING"].includes(up(freshness));
   const severeRisk = risk!=null && risk<25;
   if(!reliable) return {decision:"WATCH",conviction:"LOW",reason:"Data completeness, freshness or confidence is insufficient for a high-conviction portfolio action."};
   if(lt==null) return {decision:"WATCH",conviction:"LOW",reason:"V5.5 Long-Term score is unavailable; no investment thesis is promoted."};
@@ -39,19 +39,19 @@ export async function GET(request){
   const [h,i,s,m]=await Promise.all([
    client.from("holdings").select("instrument_id,current_value,invested_value,pnl_percentage,unrealized_pnl").eq("user_id",user.user.id).eq("instrument_id",instrumentId).maybeSingle(),
    client.from("instruments").select("id,company_name,symbol,sector").eq("id",instrumentId).maybeSingle(),
-   client.from("ai_scores").select("instrument_id,long_term_score,short_term_score,risk_score,valuation_score,final_ai_score,confidence,data_completeness,freshness_status,score_version,score_breakdown,action,risk_level,rating,updated_at").eq("user_id",user.user.id).eq("instrument_id",instrumentId).maybeSingle(),
+   client.from("ai_scores").select("instrument_id,long_term_score,short_term_score,risk_score,valuation_score,final_ai_score,confidence,data_completeness,freshness_status,score_version,score_breakdown,action,risk_level,rating,updated_at").eq("user_id",user.user.id).eq("instrument_id",instrumentId).eq("score_version",SCORE_VERSION).maybeSingle(),
    client.from("market_regime_history").select("regime,portfolio_mode,snapshot_at").order("snapshot_at",{ascending:false}).limit(1).maybeSingle()
   ]);
   for(const x of [h,i,s,m]) if(x.error) throw new Error(x.error.message);
   if(!h.data)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Holding not found."},{status:404});
   const score=s.data||{};
-  if(score.score_version!==SCORE_VERSION)return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,warning:"No V5.5 production score is available for this holding yet.",instrument:i.data||{id:instrumentId},portfolio:h.data,scores:null,decision:{decision:"WATCH",conviction:"LOW",reason:"V5.5 score is not available; no legacy score is promoted into the production decision."},model_action:null,market_regime:m.data||null,score_breakdown:{}});
+  if(!score.instrument_id)return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,warning:"No V5.5 production score is available for this holding yet.",instrument:i.data||{id:instrumentId},portfolio:h.data,scores:null,decision:{decision:"WATCH",conviction:"LOW",reason:"V5.5 score is not available; no legacy score is promoted into the production decision."},model_action:null,market_regime:m.data||null,score_breakdown:{}});
   const totalRes=await client.from("holdings").select("current_value").eq("user_id",user.user.id);
   if(totalRes.error)throw new Error(totalRes.error.message);
   const total=(totalRes.data||[]).reduce((a,x)=>a+(n(x.current_value)||0),0);
   const weight=total>0?(n(h.data.current_value)||0)/total*100:null;
   const lt=n(score.long_term_score),st=n(score.short_term_score),risk=n(score.risk_score),val=n(score.valuation_score),final=n(score.final_ai_score),regime=m.data?.regime||"NEUTRAL";
-  const d=decide({lt,st,risk,val,regime});
+  const d=decide({lt,st,risk,val,confidence:n(score.confidence),completeness:n(score.data_completeness),freshness:score.freshness_status});
   const t=timing(st,val,regime);
   return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,instrument:i.data||{id:instrumentId},portfolio:{...h.data,weight_pct:weight==null?null:Number(weight.toFixed(2))},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:score.freshness_status||"MISSING",version:score.score_version},model_action:score.action||null,decision:d,timing:t,market_regime:m.data||null,score_breakdown:score.score_breakdown||{}});
  }catch(error){return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Final decision failed."},{status:500});}
