@@ -2,44 +2,44 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
+const SCORE_VERSION = "ai_scorer_v5_5";
+const ENGINE_VERSION = "stock_intelligence_v2_0";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function authClient(request) {
+  const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return { token: null, client: null };
+  return {
+    token,
+    client: createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    }),
+  };
+}
 
 export async function GET(request) {
   try {
+    const { token, client } = authClient(request);
+    if (!token || !client) {
+      return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Authentication required." }, { status: 401 });
+    }
+
+    const { data: userResult, error: userError } = await client.auth.getUser(token);
+    if (userError || !userResult?.user) {
+      return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Invalid session." }, { status: 401 });
+    }
+    const userId = userResult.user.id;
+
     const { searchParams } = new URL(request.url);
     const instrumentId = searchParams.get("instrument_id");
-
     if (!instrumentId) {
-      return NextResponse.json(
-        { success: false, error: "instrument_id is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "instrument_id is required" }, { status: 400 });
     }
 
     const [instrumentResult, fundamentalsResult, scoreResult, holdingResult] = await Promise.all([
-      supabase
-        .from("instruments")
-        .select("id,symbol,company_name,sector")
-        .eq("id", instrumentId)
-        .maybeSingle(),
-      supabase
-        .from("fundamentals")
-        .select("*")
-        .eq("instrument_id", instrumentId)
-        .maybeSingle(),
-      supabase
-        .from("ai_scores")
-        .select("*")
-        .eq("instrument_id", instrumentId)
-        .maybeSingle(),
-      supabase
-        .from("holdings")
-        .select("quantity,average_price,invested_value,current_value,unrealized_pnl,pnl_percentage")
-        .eq("instrument_id", instrumentId),
+      client.from("instruments").select("id,symbol,company_name,sector").eq("id", instrumentId).maybeSingle(),
+      client.from("fundamentals").select("*").eq("instrument_id", instrumentId).maybeSingle(),
+      client.from("ai_scores").select("*").eq("instrument_id", instrumentId).eq("user_id", userId).eq("score_version", SCORE_VERSION).maybeSingle(),
+      client.from("holdings").select("quantity,average_price,invested_value,current_value,unrealized_pnl,pnl_percentage").eq("instrument_id", instrumentId).eq("user_id", userId),
     ]);
 
     if (instrumentResult.error) throw new Error(`Instrument query failed: ${instrumentResult.error.message}`);
@@ -48,37 +48,26 @@ export async function GET(request) {
     if (holdingResult.error) throw new Error(`Holding query failed: ${holdingResult.error.message}`);
 
     if (!instrumentResult.data) {
-      return NextResponse.json(
-        { success: false, error: "Instrument not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Instrument not found" }, { status: 404 });
     }
 
     const holdings = holdingResult.data || [];
-    const portfolio = holdings.reduce(
-      (acc, row) => {
-        acc.quantity += Number(row.quantity || 0);
-        acc.invested_value += Number(row.invested_value || 0);
-        acc.current_value += Number(row.current_value || 0);
-        acc.unrealized_pnl += Number(row.unrealized_pnl || 0);
-        return acc;
-      },
-      { quantity: 0, invested_value: 0, current_value: 0, unrealized_pnl: 0 }
-    );
-
-    portfolio.pnl_percentage = portfolio.invested_value
-      ? (portfolio.unrealized_pnl / portfolio.invested_value) * 100
-      : 0;
+    const portfolio = holdings.reduce((acc, row) => {
+      acc.quantity += Number(row.quantity || 0);
+      acc.invested_value += Number(row.invested_value || 0);
+      acc.current_value += Number(row.current_value || 0);
+      acc.unrealized_pnl += Number(row.unrealized_pnl || 0);
+      return acc;
+    }, { quantity: 0, invested_value: 0, current_value: 0, unrealized_pnl: 0 });
+    portfolio.pnl_percentage = portfolio.invested_value ? (portfolio.unrealized_pnl / portfolio.invested_value) * 100 : 0;
 
     const score = scoreResult.data || null;
     const fundamentals = fundamentalsResult.data || null;
     const breakdown = score?.score_breakdown || {};
-
     const strengths = [];
     const concerns = [];
-
-    const components = score?.score_breakdown?.components || {};
-    const raw = score?.score_breakdown?.raw_inputs || {};
+    const components = breakdown?.components || {};
+    const raw = breakdown?.raw_inputs || {};
 
     if (Number(components.growth) >= 80) strengths.push("Strong growth profile.");
     if (Number(components.profitability) >= 80) strengths.push("Strong profitability profile.");
@@ -98,12 +87,20 @@ export async function GET(request) {
 
     return NextResponse.json({
       success: true,
-      engine_version: "stock_intelligence_v1_0",
+      engine_version: ENGINE_VERSION,
+      score_version: SCORE_VERSION,
       instrument: instrumentResult.data,
       portfolio,
       fundamentals,
       ai_score: {
-        total_score: score?.total_score ?? null,
+        long_term_score: score?.long_term_score ?? null,
+        short_term_score: score?.short_term_score ?? null,
+        risk_score: score?.risk_score ?? null,
+        valuation_score: score?.valuation_score ?? null,
+        final_ai_score: score?.final_ai_score ?? null,
+        confidence: score?.confidence ?? null,
+        data_completeness: score?.data_completeness ?? null,
+        freshness_status: score?.freshness_status ?? "MISSING",
         rating: score?.rating ?? null,
         action: score?.action ?? null,
         risk_level: score?.risk_level ?? null,
@@ -137,9 +134,6 @@ export async function GET(request) {
     });
   } catch (error) {
     console.error("Stock intelligence error:", error);
-    return NextResponse.json(
-      { success: false, engine_version: "stock_intelligence_v1_0", error: error?.message || "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Unknown error" }, { status: 500 });
   }
 }
