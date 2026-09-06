@@ -20,11 +20,10 @@ export function middleware(request) {
     "/api/score-portfolio-safe",
     "/api/score-portfolio-safe-v42",
     "/api/score-diagnostics",
+    "/api/classify-portfolio",
   ];
-  if (protectedPaths.includes(path)) {
-    if (!hasPipelineSecret(request)) {
-      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (protectedPaths.includes(path) && !hasPipelineSecret(request)) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
   return NextResponse.next();
 }
@@ -40,5 +39,6 @@ export const config = {
     "/api/score-portfolio-safe",
     "/api/score-portfolio-safe-v42",
     "/api/score-diagnostics",
+    "/api/classify-portfolio",
   ],
 };
