@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_allocation_v2_0";
+const ENGINE_VERSION = "portfolio_allocation_v2_1";
 const SCORE_VERSION = "ai_scorer_v5_5";
-const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const clientFor = (token) => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } });
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const up = (v) => String(v || "").toUpperCase();
 const clamp = (v, min = 0, max = 100) => Math.max(min, Math.min(max, v));
@@ -15,7 +15,7 @@ function thesisDecision(score) {
   const completeness = n(score.data_completeness);
   const freshness = up(score.freshness_status);
   const risk = n(score.risk_score);
-  if (lt == null || (confidence != null && confidence < 60) || (completeness != null && completeness < 60) || !freshness || ["MISSING", "STALE", "VERY_STALE"].includes(freshness)) return "WATCH";
+  if (lt == null || confidence == null || confidence < 60 || completeness == null || completeness < 60 || !freshness || ["MISSING", "STALE", "VERY_STALE"].includes(freshness)) return "WATCH";
   if (risk != null && risk < 25) return "EXIT";
   if (lt < 50) return "EXIT";
   if (lt < 70) return "REDUCE";
@@ -121,7 +121,7 @@ export async function GET(request) {
   try {
     const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
     if (!token) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Authentication required." }, { status: 401 });
-    const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } });
+    const client = clientFor(token);
     const { data: userResult, error: userError } = await client.auth.getUser(token);
     if (userError || !userResult?.user) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Invalid session." }, { status: 401 });
     const userId = userResult.user.id;
