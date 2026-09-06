@@ -10,10 +10,23 @@ function hasPipelineSecret(request) {
 
 export function middleware(request) {
   const path = request.nextUrl.pathname;
-  if (["/api/calculate-score", "/api/sync-upstox-fundamentals"].includes(path)) {
+  const protectedPaths = [
+    "/api/calculate-score",
+    "/api/sync-upstox-fundamentals",
+    "/api/test-bharatstock",
+    "/api/test-upstox",
+  ];
+  if (protectedPaths.includes(path)) {
     if (!hasPipelineSecret(request)) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
   return NextResponse.next();
 }
 
-export const config = { matcher: ["/api/calculate-score", "/api/sync-upstox-fundamentals"] };
+export const config = {
+  matcher: [
+    "/api/calculate-score",
+    "/api/sync-upstox-fundamentals",
+    "/api/test-bharatstock",
+    "/api/test-upstox",
+  ],
+};
