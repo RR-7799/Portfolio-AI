@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "holding_intelligence_v2_1";
+const ENGINE_VERSION = "holding_intelligence_v2_2";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 function userClient(token) { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } }); }
@@ -43,16 +43,9 @@ export async function GET(request){
     if(risk!=null&&risk<55)invalidation.push("Risk remains elevated or deteriorates further.");
     if(["STALE","VERY_STALE","MISSING"].includes(String(freshness).toUpperCase()))invalidation.push("Financial data needs to become current before adding conviction.");
     invalidation.push("Portfolio weight crosses the concentration guardrail.");
-    return NextResponse.json({
-      success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,generated_at:new Date().toISOString(),instrument:i.data||{id:instrumentId},
-      holding:{...holding,pnl_pct:Number(n(pnl)?.toFixed(2)||0)},
-      scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:freshness,score_version:SCORE_VERSION},
-      score,
-      evidence,strengths,weaknesses,invalidation_checks:invalidation,market_regime:mr.data||null,
-      decision:{action:score.action||null,reason:breakdown.reason||score.ai_summary||"Decision explanation is not available.",source:"decision_engine_v5_3"}
-    });
+    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,generated_at:new Date().toISOString(),instrument:i.data||{id:instrumentId},holding:{...holding,pnl_pct:Number(n(pnl)?.toFixed(2)||0)},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:freshness,score_version:SCORE_VERSION},score,evidence,strengths,weaknesses,invalidation_checks:invalidation,market_regime:mr.data||null,decision:{action:score.action||null,reason:breakdown.reason||score.ai_summary||"Decision explanation is not available.",source:"decision_engine_v5_4"}});
   }catch(error){
-    console.error("Holding intelligence v2.1 error:",error);
+    console.error("Holding intelligence v2.2 error:",error);
     return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Holding intelligence failed."},{status:500});
   }
 }
