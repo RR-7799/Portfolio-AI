@@ -7,7 +7,7 @@ import { GET as runAlerts } from "../portfolio-alerts/route";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "pipeline_v2_1";
+const ENGINE_VERSION = "pipeline_v2_2";
 const BATCH_SIZE = 10;
 
 function isAuthorized(request) {
@@ -47,7 +47,7 @@ export async function GET(request) {
     if (selectedStage === "sync" || selectedStage === "all") {
       let offset = 0, finished = false;
       while (!finished) {
-        const result = await runPipelineStage(`upstox_sync_${offset}`, runBatchSync, `${origin}/api/batch-sync-upstox?limit=${BATCH_SIZE}&offset=${offset}`);
+        const result = await runPipelineStage(`upstox_sync_${offset}`, runBatchSync, `${origin}/api/batch-sync-upstox?limit=${BATCH_SIZE}&offset=${offset}`, headers);
         stages.push(result);
         if (!result.success) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, failed_stage: result.stage, elapsed_ms: Date.now() - started, stages }, { status: 502 });
         const next = result.data?.batch?.next_offset;
