@@ -16,7 +16,8 @@ function timing(st,val,regime){
   return "NEUTRAL TIMING";
 }
 function decide({lt,st,risk,val,confidence,completeness,freshness}){
-  const reliable = confidence!=null && confidence>=60 && completeness!=null && completeness>=60 && !["STALE","VERY_STALE","MISSING"].includes(up(freshness));
+  const fresh=up(freshness);
+  const reliable = confidence!=null && confidence>=60 && completeness!=null && completeness>=60 && fresh!=="" && !["STALE","VERY_STALE","MISSING"].includes(fresh);
   const severeRisk = risk!=null && risk<25;
   if(!reliable) return {decision:"WATCH",conviction:"LOW",reason:"Data completeness, freshness or confidence is insufficient for a high-conviction portfolio action."};
   if(lt==null) return {decision:"WATCH",conviction:"LOW",reason:"V5.5 Long-Term score is unavailable; no investment thesis is promoted."};
