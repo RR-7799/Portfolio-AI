@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "portfolio_allocation_v2_1";
+const ENGINE_VERSION = "portfolio_allocation_v2_2";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const clientFor = (token) => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } });
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
@@ -64,6 +64,10 @@ function buildAllocation(rows, regime) {
   }
 
   return preliminary.map(x => {
+    // A HOLD or REDUCE thesis may never be assigned a target above current exposure.
+    if (x.decision !== "BUY" && x.decision !== "EXIT" && x.decision !== "WATCH") {
+      x.target_weight_pct = Math.min(x.target_weight_pct, x.current_weight_pct);
+    }
     const delta = x.target_weight_pct - x.current_weight_pct;
     let direction = "HOLD";
     if (x.decision === "EXIT") direction = "TRIM";
