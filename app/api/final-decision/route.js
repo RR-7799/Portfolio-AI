@@ -46,7 +46,7 @@ export async function GET(request){
   for(const x of [h,i,s,m]) if(x.error) throw new Error(x.error.message);
   if(!h.data)return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:"Holding not found."},{status:404});
   const score=s.data||{};
-  if(!score.instrument_id)return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,warning:"No V5.5 production score is available for this holding yet.",instrument:i.data||{id:instrumentId},portfolio:h.data,scores:null,decision:{decision:"WATCH",conviction:"LOW",reason:"V5.5 score is not available; no legacy score is promoted into the production decision."},model_action:null,market_regime:m.data||null,score_breakdown:{}});
+  if(!score.instrument_id)return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,warning:"No V5.5 production score is available for this holding yet.",instrument:i.data||{id:instrumentId},portfolio:h.data,scores:null,decision:{decision:"WATCH",conviction:"LOW",reason:"V5.5 score is not available; no legacy score is promoted into the production decision."},market_regime:m.data||null,score_breakdown:{}});
   const totalRes=await client.from("holdings").select("current_value").eq("user_id",user.user.id);
   if(totalRes.error)throw new Error(totalRes.error.message);
   const total=(totalRes.data||[]).reduce((a,x)=>a+(n(x.current_value)||0),0);
@@ -54,6 +54,6 @@ export async function GET(request){
   const lt=n(score.long_term_score),st=n(score.short_term_score),risk=n(score.risk_score),val=n(score.valuation_score),final=n(score.final_ai_score),regime=m.data?.regime||"NEUTRAL";
   const d=decide({lt,st,risk,val,confidence:n(score.confidence),completeness:n(score.data_completeness),freshness:score.freshness_status});
   const t=timing(st,val,regime);
-  return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,instrument:i.data||{id:instrumentId},portfolio:{...h.data,weight_pct:weight==null?null:Number(weight.toFixed(2))},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:score.freshness_status||"MISSING",version:score.score_version},model_action:score.action||null,decision:d,timing:t,market_regime:m.data||null,score_breakdown:score.score_breakdown||{}});
+  return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,instrument:i.data||{id:instrumentId},portfolio:{...h.data,weight_pct:weight==null?null:Number(weight.toFixed(2))},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:score.freshness_status||"MISSING",version:score.score_version},decision:d,timing:t,market_regime:m.data||null,score_breakdown:score.score_breakdown||{}});
  }catch(error){return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Final decision failed."},{status:500});}
 }
