@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "rebalance_v1_3";
+const ENGINE_VERSION = "rebalance_v1_4";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = x => { const v = Number(x); return Number.isFinite(v) ? v : null; };
 const clamp = (x,a,b) => Math.max(a,Math.min(b,x));
 
-function thesisAction(longTermScore) {
+function thesisAction(longTermScore, riskScore) {
   const lt = n(longTermScore);
   if (lt == null) return "WATCH";
+  if (n(riskScore) !== null && n(riskScore) < 25) return "EXIT";
   if (lt < 50) return "EXIT";
   if (lt < 70) return "REDUCE";
   if (lt < 80) return "HOLD";
@@ -41,7 +42,7 @@ export async function GET(request) {
     if (!ids.length) return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,portfolio:{current_value:cash},rows:[],actions:[],warnings:["No stock holdings found."]});
     const [{data:instruments,error:iErr},{data:scores,error:sErr}] = await Promise.all([
       client.from("instruments").select("id,symbol,company_name,sector").in("id",ids),
-      client.from("ai_scores").select("instrument_id,final_ai_score,long_term_score,short_term_score,risk_score,valuation_score,action,risk_level,rating,score_version,score_breakdown").eq("user_id",user.user.id).in("instrument_id",ids)
+      client.from("ai_scores").select("instrument_id,final_ai_score,long_term_score,short_term_score,risk_score,valuation_score,action,risk_level,rating,score_version,score_breakdown,confidence,data_completeness,freshness_status").eq("user_id",user.user.id).in("instrument_id",ids)
     ]);
     if (iErr) throw new Error(iErr.message);
     if (sErr) throw new Error(sErr.message);
@@ -61,7 +62,7 @@ export async function GET(request) {
       const inst = im.get(id)||{}, score = sm.get(id)||{}, pos = byId.get(id)||{};
       const currentWeight = totalValue ? pos.current_value/totalValue*100 : 0;
       const longTermScore = score.long_term_score ?? null;
-      const thesis = thesisAction(longTermScore);
+      const thesis = thesisAction(longTermScore, score.risk_score);
       const target = targetWeight({longTermScore,risk:score.risk_level,currentWeight});
       return {id,company_name:inst.company_name||"Unknown",symbol:inst.symbol||"—",sector:inst.sector||"OTHER",current_value:pos.current_value||0,current_weight:Number(currentWeight.toFixed(2)),score:score.final_ai_score??null,long_term_score:longTermScore,short_term_score:score.short_term_score??null,risk_score:score.risk_score??null,valuation_score:score.valuation_score??null,risk:score.risk_level||"—",action:thesis,scorer_action:score.action||null,score_version:score.score_version||"MISSING",target_weight:target,difference:target==null?null:Number((target-currentWeight).toFixed(2))};
     }).sort((a,b)=>(b.difference??-Infinity)-(a.difference??-Infinity));
