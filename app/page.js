@@ -1,3 +1,5 @@
-import Dashboard from "./dashboard";
-import DashboardDualScore from "./components/DashboardDualScore";
-export default function Home(){return <><Dashboard/><DashboardDualScore/></>}
+import DashboardV55 from "./components/DashboardV55";
+
+export default function Home() {
+  return <DashboardV55 />;
+}
