@@ -84,12 +84,12 @@ export default function IntradayScanner() {
   return (
     <section className="card" style={{ marginTop: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-        <div><span className="label">INTRADAY AI / LIVE</span><h2 style={{ marginTop: 8 }}>Nifty LargeMidcap 250 Scanner</h2><p>Only higher-quality setups are shown. The machine prefers controlled risk over maximum signal count.</p></div>
+        <div><span className="label">INTRADAY AI / LIVE</span><h2 style={{ marginTop: 8 }}>Nifty 500 Scanner</h2><p>Scans the official NIFTY 500 universe. Only higher-quality setups are shown; the machine prefers controlled risk over maximum signal count.</p></div>
         <button className="primary" onClick={scan} disabled={status === "loading"}>{status === "loading" ? "Scanning…" : "Scan now"}</button>
       </div>
-      {status === "loading" && <p style={{ marginTop: 18 }}>Scanning 250 constituents and applying risk gates…</p>}
+      {status === "loading" && <p style={{ marginTop: 18 }}>Scanning the NIFTY 500 universe and applying risk gates…</p>}
       {status === "error" && <div className="error" style={{ marginTop: 18 }}>{message}</div>}
-      {status === "ready" && meta && <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.8}% · {meta.elapsed_ms}ms</div>}
+      {status === "ready" && meta && <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.6}% · {meta.elapsed_ms}ms</div>}
       <TrackRecord analytics={analytics} />
       {status === "ready" && signals.length === 0 && <p style={{ marginTop: 18 }}>No qualifying low-risk intraday setup right now. That is a valid result — the machine does not force a trade.</p>}
       {signals.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginTop: 20 }}>{signals.map((signal) => <SignalCard key={`${signal.instrument_key}-${signal.direction}-${signal.setup}`} signal={signal} />)}</div>}
