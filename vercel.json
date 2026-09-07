@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/decision-validation/capture",
+      "schedule": "30 16 * * *"
+    }
+  ]
+}
