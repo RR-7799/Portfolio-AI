@@ -4,10 +4,13 @@ import { gunzipSync } from "node:zlib";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "intraday_engine_v1_2";
+const ENGINE_VERSION = "intraday_engine_v1_3";
 const UPSTOX = "https://api.upstox.com/v3";
 const NSE_INSTRUMENTS = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
 const NIFTY_LARGEMIDCAP_250 = "https://nsearchives.nseindia.com/content/indices/ind_niftylargemidcap250list.csv";
+const MAX_RISK_PCT = 0.6;
+const MIN_RISK_PCT = 0.25;
+const MIN_SETUP_SCORE = 78;
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const avg = (xs) => { const a = xs.filter(Number.isFinite); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null; };
 
@@ -97,52 +100,72 @@ function quoteMap(body) {
 async function intradayMetrics(key, token) {
   const r = await upstox(`/historical-candle/intraday/${encodeURIComponent(key)}/minutes/5`, token);
   const candles = Array.isArray(r.body?.data?.candles) ? r.body.data.candles : [];
-  if (!r.ok || candles.length < 8) return null;
+  if (!r.ok || candles.length < 10) return null;
   const ordered = [...candles].reverse();
-  const closes = ordered.map(x => n(x[4])).filter(v => v != null);
-  const highs = ordered.map(x => n(x[2])).filter(v => v != null);
-  const lows = ordered.map(x => n(x[3])).filter(v => v != null);
-  const vols = ordered.map(x => n(x[5])).filter(v => v != null);
-  const last = ordered.at(-1);
+  const completed = ordered.slice(0, -1);
+  if (completed.length < 9) return null;
+  const closes = completed.map(x => n(x[4])).filter(v => v != null);
+  const highs = completed.map(x => n(x[2])).filter(v => v != null);
+  const lows = completed.map(x => n(x[3])).filter(v => v != null);
+  const vols = completed.map(x => n(x[5])).filter(v => v != null);
+  const last = completed.at(-1);
   const price = n(last?.[4]);
   const recentVol = vols.at(-1);
   const baseline = avg(vols.slice(Math.max(0, vols.length - 21), -1));
   const relativeVolume = baseline && recentVol ? recentVol / baseline : null;
   let pv = 0, vv = 0;
-  for (const c of ordered) { const h=n(c[2]), l=n(c[3]), v=n(c[5]); if(h!=null&&l!=null&&v!=null){pv += ((h+l)/2)*v; vv += v;} }
+  for (const c of completed) { const h=n(c[2]), l=n(c[3]), v=n(c[5]); if(h!=null&&l!=null&&v!=null){pv += ((h+l)/2)*v; vv += v;} }
   const vwap = vv ? pv / vv : null;
-  const priorHigh = Math.max(...highs.slice(0, -1).slice(-12));
-  const priorLow = Math.min(...lows.slice(0, -1).slice(-12));
+  const priorHigh = Math.max(...highs.slice(-13, -1));
+  const priorLow = Math.min(...lows.slice(-13, -1));
   const recentRange = Math.max(...highs.slice(-12)) - Math.min(...lows.slice(-12));
+  const recentLow3 = Math.min(...lows.slice(-3));
+  const recentHigh3 = Math.max(...highs.slice(-3));
   const momentum5 = closes.length > 6 && closes.at(-7) ? ((price - closes.at(-7)) / closes.at(-7)) * 100 : 0;
-  return { price, relativeVolume, vwap, priorHigh, priorLow, recentRange, momentum5, candles: ordered.length };
+  const candleOpen = n(last?.[1]), candleClose = n(last?.[4]);
+  const candleBodyPct = candleOpen && candleClose ? Math.abs((candleClose - candleOpen) / candleOpen) * 100 : 0;
+  const candleDirection = candleClose > candleOpen ? "LONG" : candleClose < candleOpen ? "SHORT" : "FLAT";
+  return { price, relativeVolume, vwap, priorHigh, priorLow, recentRange, recentLow3, recentHigh3, momentum5, candleBodyPct, candleDirection, candles: completed.length };
 }
 
 function rankCandidate(meta, quote, metrics) {
-  if (!quote?.price || !metrics?.price) return null;
-  const changePct = quote.prev ? ((quote.price - quote.prev) / quote.prev) * 100 : 0;
+  if (!quote?.price || !metrics?.price || !metrics.vwap) return null;
+  const entry = quote.price;
+  const changePct = quote.prev ? ((entry - quote.prev) / quote.prev) * 100 : 0;
   const rv = metrics.relativeVolume ?? 0;
-  const aboveVwap = metrics.vwap ? quote.price > metrics.vwap : false;
-  const breakout = quote.price > metrics.priorHigh && rv >= 1.5;
-  const breakdown = quote.price < metrics.priorLow && rv >= 1.5;
-  const longMomentum = changePct > 0.6 && metrics.momentum5 > 0.3 && aboveVwap && rv >= 1.5;
-  const shortMomentum = changePct < -0.6 && metrics.momentum5 < -0.3 && !aboveVwap && rv >= 1.5;
-  if (!breakout && !breakdown && !longMomentum && !shortMomentum) return null;
-  const direction = breakout || longMomentum ? "LONG" : "SHORT";
-  const setup = breakout ? "VOLUME BREAKOUT" : breakdown ? "VOLUME BREAKDOWN" : direction === "LONG" ? "MOMENTUM" : "MOMENTUM SHORT";
+  const vwapDistancePct = Math.abs((entry - metrics.vwap) / metrics.vwap) * 100;
+  const aboveVwap = entry > metrics.vwap;
+  const breakoutLong = entry > metrics.priorHigh && metrics.candleDirection === "LONG" && metrics.candleBodyPct >= 0.15 && rv >= 1.5;
+  const breakoutShort = entry < metrics.priorLow && metrics.candleDirection === "SHORT" && metrics.candleBodyPct >= 0.15 && rv >= 1.5;
+  const longMomentum = changePct > 0.6 && metrics.momentum5 > 0.3 && aboveVwap && metrics.candleDirection === "LONG" && rv >= 1.5;
+  const shortMomentum = changePct < -0.6 && metrics.momentum5 < -0.3 && !aboveVwap && metrics.candleDirection === "SHORT" && rv >= 1.5;
+  const breakout = breakoutLong || breakoutShort;
+  if (!breakout && !longMomentum && !shortMomentum) return null;
+  const direction = breakoutLong || longMomentum ? "LONG" : "SHORT";
+  const setup = breakout ? (direction === "LONG" ? "VOLUME BREAKOUT" : "VOLUME BREAKDOWN") : direction === "LONG" ? "MOMENTUM" : "MOMENTUM SHORT";
+  // Avoid chasing: a live quote already far from VWAP is less attractive even when momentum is strong.
+  const maxVwapExtension = breakout ? 1.0 : 0.8;
+  if (vwapDistancePct > maxVwapExtension) return null;
+  if (breakout) {
+    const breakoutDistancePct = Math.abs((entry - (direction === "LONG" ? metrics.priorHigh : metrics.priorLow)) / entry) * 100;
+    if (breakoutDistancePct > 0.45) return null;
+  }
   let score = 45;
   score += Math.min(20, Math.abs(changePct) * 8);
   score += Math.min(20, Math.max(0, rv - 1) * 12);
   score += aboveVwap === (direction === "LONG") ? 10 : 0;
-  score += breakout || breakdown ? 10 : 0;
+  score += breakout ? 10 : 0;
+  score += metrics.candleBodyPct >= 0.3 ? 5 : 0;
   score = Math.max(0, Math.min(100, score));
-  if (score < 75) return null;
-  const entry = quote.price;
-  const range = Math.max(metrics.recentRange || entry * 0.01, entry * 0.003);
-  const risk = range * 0.35;
+  if (score < MIN_SETUP_SCORE) return null;
+
+  // Use recent market structure for the stop. If structure requires too much risk, reject the setup.
+  const structuralStop = direction === "LONG" ? metrics.recentLow3 : metrics.recentHigh3;
+  const risk = Math.abs(entry - structuralStop);
+  if (!Number.isFinite(risk) || risk <= 0) return null;
   const riskPct = (risk / entry) * 100;
-  if (riskPct < 0.25 || riskPct > 0.8) return null;
-  const stop = direction === "LONG" ? entry - risk : entry + risk;
+  if (riskPct < MIN_RISK_PCT || riskPct > MAX_RISK_PCT) return null;
+  const stop = structuralStop;
   const target1 = direction === "LONG" ? entry + risk * 2 : entry - risk * 2;
   const target2 = direction === "LONG" ? entry + risk * 3 : entry - risk * 3;
   return {
@@ -191,7 +214,7 @@ export async function GET(request) {
         tracked = data.length;
       }
     }
-    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe: "NIFTY_LARGEMIDCAP_250", universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: universe.length, signal_count: top.length, tracked_signal_count: tracked, risk_policy: { min_setup_score: 75, min_risk_pct: 0.25, max_risk_pct: 0.8, target1_r: 2, target2_r: 3 }, signals: top, scanned_at: scannedAt, elapsed_ms: Date.now() - started });
+    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe: "NIFTY_LARGEMIDCAP_250", universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: universe.length, signal_count: top.length, tracked_signal_count: tracked, risk_policy: { min_setup_score: MIN_SETUP_SCORE, min_risk_pct: MIN_RISK_PCT, max_risk_pct: MAX_RISK_PCT, target1_r: 2, target2_r: 3, stop_policy: "recent_3_candle_structure", max_vwap_extension_pct: 1.0 }, signals: top, scanned_at: scannedAt, elapsed_ms: Date.now() - started });
   } catch (error) {
     console.error("Intraday scanner error:", error);
     return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Intraday scan failed." }, { status: 500 });
