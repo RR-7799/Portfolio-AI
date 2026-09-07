@@ -69,6 +69,39 @@ function TrackRecord({ analytics }) {
   );
 }
 
+function RejectionFunnel({ funnel }) {
+  if (!funnel) return null;
+  const rows = [
+    ["Universe", funnel.universe],
+    ["Quote eligible", funnel.quote_eligible],
+    ["Candle / metrics eligible", funnel.candle_eligible],
+    ["Setup eligible", funnel.setup_eligible],
+    ["VWAP rejected", funnel.vwap_rejected],
+    ["Chase rejected", funnel.chase_rejected],
+    ["Guard passed", funnel.guard_passed],
+    ["Score ≥ 78", funnel.score_passed],
+    ["Score rejected", funnel.score_rejected],
+    ["Risk passed", funnel.risk_passed],
+    ["Risk rejected", funnel.risk_rejected],
+  ];
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <div className="label">SCAN DIAGNOSTICS</div>
+      <div style={{ marginTop: 6, fontSize: 13, opacity: 0.7 }}>Why stocks were rejected — no trading thresholds are changed by this diagnostic.</div>
+      <div style={{ marginTop: 12, display: "grid", gap: 7 }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
+            <span>{label}</span><strong>{Number(value || 0).toLocaleString("en-IN")}</strong>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, marginTop: 4, paddingTop: 8, borderTop: "1px solid rgba(127,127,127,.18)" }}>
+          <span>Candle/API failures</span><strong>{Number(funnel.candle_failures || 0).toLocaleString("en-IN")}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function IntradayScanner() {
   const [signals, setSignals] = useState([]);
   const [status, setStatus] = useState("idle");
@@ -90,6 +123,7 @@ export default function IntradayScanner() {
       {status === "loading" && <p style={{ marginTop: 18 }}>Scanning the NIFTY 500 universe and applying risk gates…</p>}
       {status === "error" && <div className="error" style={{ marginTop: 18 }}>{message}</div>}
       {status === "ready" && meta && <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.6}% · {meta.elapsed_ms}ms</div>}
+      {status === "ready" && meta?.rejection_funnel && <RejectionFunnel funnel={{ ...meta.rejection_funnel, candle_failures: meta.candle_failures }} />}
       <TrackRecord analytics={analytics} />
       {status === "ready" && signals.length === 0 && <p style={{ marginTop: 18 }}>No qualifying low-risk intraday setup right now. That is a valid result — the machine does not force a trade.</p>}
       {signals.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginTop: 20 }}>{signals.map((signal) => <SignalCard key={`${signal.instrument_key}-${signal.direction}-${signal.setup}`} signal={signal} />)}</div>}
