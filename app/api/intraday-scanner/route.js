@@ -4,9 +4,10 @@ import { gunzipSync } from "node:zlib";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "intraday_engine_v1_0";
+const ENGINE_VERSION = "intraday_engine_v1_1";
 const UPSTOX = "https://api.upstox.com/v3";
 const NSE_INSTRUMENTS = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
+const NIFTY_LARGEMIDCAP_250 = "https://nsearchives.nseindia.com/content/indices/ind_niftylargemidcap250list.csv";
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const avg = (xs) => { const a = xs.filter(Number.isFinite); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null; };
 
@@ -25,12 +26,52 @@ async function upstox(path, token) {
   return { ok: r.ok, status: r.status, body };
 }
 
+function parseCsv(text) {
+  const rows = [];
+  let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (quoted && text[i + 1] === '"') { cell += '"'; i++; }
+      else quoted = !quoted;
+    } else if (ch === "," && !quoted) {
+      row.push(cell.trim()); cell = "";
+    } else if ((ch === "\n" || ch === "\r") && !quoted) {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell.trim()); cell = "";
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell.trim()); if (row.some(Boolean)) rows.push(row); }
+  return rows;
+}
+
+async function loadLargeMidcap250Symbols() {
+  const r = await fetch(NIFTY_LARGEMIDCAP_250, { cache: "no-store", headers: { Accept: "text/csv,*/*" } });
+  if (!r.ok) throw new Error(`NIFTY LargeMidcap 250 constituent list unavailable (${r.status}).`);
+  const rows = parseCsv(await r.text());
+  if (!rows.length) throw new Error("NIFTY LargeMidcap 250 constituent list is empty.");
+  const headerIndex = rows.findIndex(row => row.some(cell => /symbol/i.test(cell)));
+  if (headerIndex < 0) throw new Error("NIFTY LargeMidcap 250 constituent list has no Symbol column.");
+  const header = rows[headerIndex].map(x => x.toLowerCase());
+  const symbolIndex = header.findIndex(x => x === "symbol" || x.includes("symbol"));
+  if (symbolIndex < 0) throw new Error("NIFTY LargeMidcap 250 constituent list has no usable Symbol column.");
+  return new Set(rows.slice(headerIndex + 1).map(row => String(row[symbolIndex] || "").trim().toUpperCase()).filter(Boolean));
+}
+
 async function loadUniverse() {
-  const r = await fetch(NSE_INSTRUMENTS, { cache: "no-store" });
-  if (!r.ok) throw new Error(`NSE instrument master unavailable (${r.status}).`);
-  const raw = gunzipSync(Buffer.from(await r.arrayBuffer())).toString("utf8");
+  const [instrumentResponse, indexSymbols] = await Promise.all([
+    fetch(NSE_INSTRUMENTS, { cache: "no-store" }),
+    loadLargeMidcap250Symbols(),
+  ]);
+  if (!instrumentResponse.ok) throw new Error(`NSE instrument master unavailable (${instrumentResponse.status}).`);
+  const raw = gunzipSync(Buffer.from(await instrumentResponse.arrayBuffer())).toString("utf8");
   const rows = JSON.parse(raw);
-  return rows.filter(x => x?.segment === "NSE_EQ" && x?.instrument_type === "EQ" && x?.instrument_key && x?.trading_symbol);
+  const universe = rows.filter(x => x?.segment === "NSE_EQ" && x?.instrument_type === "EQ" && x?.instrument_key && x?.trading_symbol);
+  const selected = universe.filter(x => indexSymbols.has(String(x.trading_symbol).trim().toUpperCase()) && !["BE", "BL", "BZ", "SM", "ST", "SZ"].includes(String(x.security_type || "").toUpperCase()));
+  if (selected.length < 240 || selected.length > 260) throw new Error(`NIFTY LargeMidcap 250 mapping produced ${selected.length} NSE equity instruments; refusing to scan an incomplete universe.`);
+  return selected;
 }
 
 function quoteMap(body) {
@@ -101,17 +142,15 @@ export async function GET(request) {
   const started = Date.now();
   try {
     const universe = await loadUniverse();
-    const eligible = universe.filter(x => !["BE", "BL", "BZ", "SM", "ST", "SZ"].includes(String(x.security_type || "").toUpperCase()));
     const quotes = new Map();
-    for (let i = 0; i < eligible.length; i += 500) {
-      const keys = eligible.slice(i, i + 500).map(x => x.instrument_key).join(",");
+    for (let i = 0; i < universe.length; i += 500) {
+      const keys = universe.slice(i, i + 500).map(x => x.instrument_key).join(",");
       const r = await upstox(`/market-quote/quotes?instrument_key=${encodeURIComponent(keys)}`, token);
       if (r.ok) for (const [k, v] of quoteMap(r.body)) quotes.set(k, v);
     }
-    const liquid = eligible.map(meta => ({ meta, quote: quotes.get(meta.instrument_key) })).filter(x => x.quote?.price && x.quote.volume).sort((a, b) => (b.quote.volume || 0) - (a.quote.volume || 0)).slice(0, 120);
     const candidates = [];
-    for (let i = 0; i < liquid.length; i += 8) {
-      const batch = await Promise.all(liquid.slice(i, i + 8).map(async ({ meta, quote }) => rankCandidate(meta, quote, await intradayMetrics(meta.instrument_key, token))));
+    for (let i = 0; i < universe.length; i += 8) {
+      const batch = await Promise.all(universe.slice(i, i + 8).map(async meta => rankCandidate(meta, quotes.get(meta.instrument_key), await intradayMetrics(meta.instrument_key, token))));
       candidates.push(...batch.filter(Boolean));
     }
     candidates.sort((a, b) => b.setup_score - a.setup_score);
@@ -122,7 +161,7 @@ export async function GET(request) {
       const { error } = await supabase.from("intraday_scan_results").insert(rows);
       if (error) throw error;
     }
-    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: liquid.length, signal_count: top.length, signals: top, scanned_at: new Date().toISOString(), elapsed_ms: Date.now() - started });
+    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe: "NIFTY_LARGEMIDCAP_250", universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: universe.length, signal_count: top.length, signals: top, scanned_at: new Date().toISOString(), elapsed_ms: Date.now() - started });
   } catch (error) {
     console.error("Intraday scanner error:", error);
     return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Intraday scan failed." }, { status: 500 });
