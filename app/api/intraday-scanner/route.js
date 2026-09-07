@@ -4,12 +4,24 @@ import { gunzipSync } from "node:zlib";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "intraday_engine_v1_1";
+const ENGINE_VERSION = "intraday_engine_v1_2";
 const UPSTOX = "https://api.upstox.com/v3";
 const NSE_INSTRUMENTS = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
 const NIFTY_LARGEMIDCAP_250 = "https://nsearchives.nseindia.com/content/indices/ind_niftylargemidcap250list.csv";
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const avg = (xs) => { const a = xs.filter(Number.isFinite); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null; };
+
+function istParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(date);
+  const get = (type) => parts.find(p => p.type === type)?.value;
+  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+function inTradingWindow() {
+  const { weekday, hour, minute } = istParts();
+  if (["Sat", "Sun"].includes(weekday)) return false;
+  const t = hour * 60 + minute;
+  return t >= 9 * 60 + 20 && t <= 15 * 60 + 20;
+}
 
 async function auth(request) {
   const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
@@ -34,9 +46,8 @@ function parseCsv(text) {
     if (ch === '"') {
       if (quoted && text[i + 1] === '"') { cell += '"'; i++; }
       else quoted = !quoted;
-    } else if (ch === "," && !quoted) {
-      row.push(cell.trim()); cell = "";
-    } else if ((ch === "\n" || ch === "\r") && !quoted) {
+    } else if (ch === "," && !quoted) { row.push(cell.trim()); cell = ""; }
+    else if ((ch === "\n" || ch === "\r") && !quoted) {
       if (ch === "\r" && text[i + 1] === "\n") i++;
       row.push(cell.trim()); cell = "";
       if (row.some(Boolean)) rows.push(row);
@@ -114,8 +125,8 @@ function rankCandidate(meta, quote, metrics) {
   const aboveVwap = metrics.vwap ? quote.price > metrics.vwap : false;
   const breakout = quote.price > metrics.priorHigh && rv >= 1.5;
   const breakdown = quote.price < metrics.priorLow && rv >= 1.5;
-  const longMomentum = changePct > 0.6 && metrics.momentum5 > 0.3 && aboveVwap && rv >= 1.2;
-  const shortMomentum = changePct < -0.6 && metrics.momentum5 < -0.3 && !aboveVwap && rv >= 1.2;
+  const longMomentum = changePct > 0.6 && metrics.momentum5 > 0.3 && aboveVwap && rv >= 1.5;
+  const shortMomentum = changePct < -0.6 && metrics.momentum5 < -0.3 && !aboveVwap && rv >= 1.5;
   if (!breakout && !breakdown && !longMomentum && !shortMomentum) return null;
   const direction = breakout || longMomentum ? "LONG" : "SHORT";
   const setup = breakout ? "VOLUME BREAKOUT" : breakdown ? "VOLUME BREAKDOWN" : direction === "LONG" ? "MOMENTUM" : "MOMENTUM SHORT";
@@ -125,13 +136,23 @@ function rankCandidate(meta, quote, metrics) {
   score += aboveVwap === (direction === "LONG") ? 10 : 0;
   score += breakout || breakdown ? 10 : 0;
   score = Math.max(0, Math.min(100, score));
+  if (score < 75) return null;
   const entry = quote.price;
   const range = Math.max(metrics.recentRange || entry * 0.01, entry * 0.003);
   const risk = range * 0.35;
+  const riskPct = (risk / entry) * 100;
+  if (riskPct < 0.25 || riskPct > 0.8) return null;
   const stop = direction === "LONG" ? entry - risk : entry + risk;
   const target1 = direction === "LONG" ? entry + risk * 2 : entry - risk * 2;
   const target2 = direction === "LONG" ? entry + risk * 3 : entry - risk * 3;
-  return { instrument_key: meta.instrument_key, trading_symbol: meta.trading_symbol, company_name: meta.name, price: entry, change_pct: changePct, volume: quote.volume, relative_volume: rv, vwap: metrics.vwap, momentum_score: Number(Math.min(100, 50 + Math.abs(metrics.momentum5) * 20).toFixed(1)), volume_score: Number(Math.min(100, 50 + Math.max(0, rv - 1) * 30).toFixed(1)), setup_score: Number(score.toFixed(1)), setup, direction, entry_price: entry, stop_loss: stop, target_1: target1, target_2: target2, risk_reward: 2, data_status: "LIVE" };
+  return {
+    instrument_key: meta.instrument_key, trading_symbol: meta.trading_symbol, company_name: meta.name,
+    price: entry, change_pct: changePct, volume: quote.volume, relative_volume: rv, vwap: metrics.vwap,
+    momentum_score: Number(Math.min(100, 50 + Math.abs(metrics.momentum5) * 20).toFixed(1)),
+    volume_score: Number(Math.min(100, 50 + Math.max(0, rv - 1) * 30).toFixed(1)),
+    setup_score: Number(score.toFixed(1)), setup, direction, entry_price: entry, stop_loss: stop,
+    target_1: target1, target_2: target2, risk_reward: 2, risk_pct: Number(riskPct.toFixed(3)), data_status: "LIVE",
+  };
 }
 
 export async function GET(request) {
@@ -139,6 +160,7 @@ export async function GET(request) {
   if (!user) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "Authentication required." }, { status: 401 });
   const token = process.env.UPSTOX_ANALYTICS_TOKEN;
   if (!token) return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: "UPSTOX_ANALYTICS_TOKEN is missing." }, { status: 500 });
+  if (!inTradingWindow()) return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, market_open: false, signal_count: 0, signals: [], message: "Scanner is active only during the NSE intraday window." });
   const started = Date.now();
   try {
     const universe = await loadUniverse();
@@ -153,15 +175,23 @@ export async function GET(request) {
       const batch = await Promise.all(universe.slice(i, i + 8).map(async meta => rankCandidate(meta, quotes.get(meta.instrument_key), await intradayMetrics(meta.instrument_key, token))));
       candidates.push(...batch.filter(Boolean));
     }
-    candidates.sort((a, b) => b.setup_score - a.setup_score);
-    const top = candidates.slice(0, 25);
+    candidates.sort((a, b) => b.setup_score - a.setup_score || a.risk_pct - b.risk_pct);
+    const top = candidates.slice(0, 15);
+    const scannedAt = new Date().toISOString();
     const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+    let tracked = 0;
     if (top.length) {
-      const rows = top.map(x => ({ ...x, scan_at: new Date().toISOString() }));
-      const { error } = await supabase.from("intraday_scan_results").insert(rows);
+      const rows = top.map(x => ({ ...x, scan_at: scannedAt }));
+      const { data, error } = await supabase.from("intraday_scan_results").insert(rows).select("id,scan_at,instrument_key,trading_symbol,direction,setup,setup_score,entry_price,stop_loss,target_1,target_2,risk_reward");
       if (error) throw error;
+      if (data?.length) {
+        const outcomes = data.map(x => ({ signal_id: x.id, instrument_key: x.instrument_key, trading_symbol: x.trading_symbol, direction: x.direction, setup: x.setup, setup_score: x.setup_score, entry_price: x.entry_price, stop_loss: x.stop_loss, target_1: x.target_1, target_2: x.target_2, risk_reward: x.risk_reward, signal_at: x.scan_at, outcome: "OPEN" }));
+        const trackedResult = await supabase.from("intraday_signal_outcomes").upsert(outcomes, { onConflict: "signal_id", ignoreDuplicates: true });
+        if (trackedResult.error) throw trackedResult.error;
+        tracked = data.length;
+      }
     }
-    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe: "NIFTY_LARGEMIDCAP_250", universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: universe.length, signal_count: top.length, signals: top, scanned_at: new Date().toISOString(), elapsed_ms: Date.now() - started });
+    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, universe: "NIFTY_LARGEMIDCAP_250", universe_count: universe.length, quote_count: quotes.size, intraday_candidates_scanned: universe.length, signal_count: top.length, tracked_signal_count: tracked, risk_policy: { min_setup_score: 75, min_risk_pct: 0.25, max_risk_pct: 0.8, target1_r: 2, target2_r: 3 }, signals: top, scanned_at: scannedAt, elapsed_ms: Date.now() - started });
   } catch (error) {
     console.error("Intraday scanner error:", error);
     return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Intraday scan failed." }, { status: 500 });
