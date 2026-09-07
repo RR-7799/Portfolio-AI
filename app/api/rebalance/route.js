@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "rebalance_v1_4";
+const ENGINE_VERSION = "rebalance_v1_5";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = x => { const v = Number(x); return Number.isFinite(v) ? v : null; };
 const clamp = (x,a,b) => Math.max(a,Math.min(b,x));
@@ -16,15 +16,19 @@ function thesisAction(longTermScore, riskScore) {
   return "BUY";
 }
 
-function targetWeight({ longTermScore, risk, currentWeight }) {
+function targetWeight({ longTermScore, risk, currentWeight, action }) {
   const lt = n(longTermScore);
-  if (lt == null) return null;
+  const current = Math.max(n(currentWeight) || 0, 0);
+  if (lt == null || action === "WATCH") return null;
+  if (action === "EXIT") return 0;
   const r = String(risk || "UNKNOWN").toUpperCase();
   let base = lt >= 82 ? 8 : lt >= 72 ? 6 : lt >= 60 ? 4 : lt >= 50 ? 2 : 0;
   if (["HIGH","VERY HIGH","CRITICAL"].includes(r)) base *= 0.55;
   else if (r === "MODERATE" || r === "LOW-MODERATE") base *= 0.85;
-  if ((currentWeight ?? 0) > 12) base = Math.min(base, 8);
-  return Number(clamp(base,0,10).toFixed(2));
+  if (current > 12) base = Math.min(base, 8);
+  base = Number(clamp(base,0,10).toFixed(2));
+  if (action !== "BUY") return Math.min(base, current);
+  return base;
 }
 
 export async function GET(request) {
@@ -63,7 +67,7 @@ export async function GET(request) {
       const currentWeight = totalValue ? pos.current_value/totalValue*100 : 0;
       const longTermScore = score.long_term_score ?? null;
       const thesis = thesisAction(longTermScore, score.risk_score);
-      const target = targetWeight({longTermScore,risk:score.risk_level,currentWeight});
+      const target = targetWeight({longTermScore,risk:score.risk_level,currentWeight,action:thesis});
       return {id,company_name:inst.company_name||"Unknown",symbol:inst.symbol||"—",sector:inst.sector||"OTHER",current_value:pos.current_value||0,current_weight:Number(currentWeight.toFixed(2)),score:score.final_ai_score??null,long_term_score:longTermScore,short_term_score:score.short_term_score??null,risk_score:score.risk_score??null,valuation_score:score.valuation_score??null,risk:score.risk_level||"—",action:thesis,scorer_action:score.action||null,score_version:score.score_version||"MISSING",target_weight:target,difference:target==null?null:Number((target-currentWeight).toFixed(2))};
     }).sort((a,b)=>(b.difference??-Infinity)-(a.difference??-Infinity));
     const deployable = Math.max(totalValue,0);
