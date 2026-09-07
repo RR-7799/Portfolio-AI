@@ -2,13 +2,22 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
-const ENGINE_VERSION = "holding_intelligence_v2_2";
+const ENGINE_VERSION = "holding_intelligence_v2_3";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 function userClient(token) { return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { global: { headers: { Authorization: `Bearer ${token}` } } }); }
 function gradeLT(v){return v==null?"Unavailable":v>=90?"Exceptional":v>=80?"Excellent":v>=70?"Good":v>=60?"Average":v>=50?"Weak":"Poor";}
 function gradeST(v){return v==null?"Unavailable":v>=90?"Exceptional setup":v>=80?"Strong":v>=70?"Positive":v>=60?"Neutral":v>=50?"Weak":"Poor setup";}
 function gradeFinal(v){return v==null?"Unavailable":v>=90?"Exceptional":v>=85?"Very Strong":v>=75?"Strong":v>=65?"Good/Average":v>=55?"Weak":v>=45?"Poor":"Very Poor";}
+function thesisAction(longTermScore, riskScore, reliable) {
+  const lt = n(longTermScore);
+  if (!reliable || lt === null) return "WATCH";
+  if (n(riskScore) !== null && n(riskScore) < 25) return "EXIT";
+  if (lt < 50) return "EXIT";
+  if (lt < 70) return "REDUCE";
+  if (lt < 80) return "HOLD";
+  return "BUY";
+}
 function evidenceFromScore(score) {
   const labels = { growth_score:"Growth", profitability_score:"Profitability", debt_score:"Debt / leverage", ownership_score:"Ownership", cashflow_score:"Operating cash flow", valuation_score:"Valuation" };
   return Object.entries(labels).map(([key,factor])=>({factor,score:n(score?.[key])})).filter(x=>x.score!==null).sort((a,b)=>b.score-a.score);
@@ -36,6 +45,9 @@ export async function GET(request){
     const lt=n(score.long_term_score),st=n(score.short_term_score),risk=n(score.risk_score),valuation=n(score.valuation_score),final=n(score.final_ai_score);
     const breakdown=score.score_breakdown&&typeof score.score_breakdown==="object"?score.score_breakdown:{};
     const freshness=score.freshness_status||breakdown.freshness?.status||"MISSING";
+    const confidence=n(score.confidence), completeness=n(score.data_completeness);
+    const reliableScore=confidence!==null&&confidence>=60&&completeness!==null&&completeness>=60&&!['MISSING','STALE','VERY_STALE'].includes(String(freshness).toUpperCase());
+    const action=thesisAction(lt,risk,reliableScore);
     const evidence=evidenceFromScore(score);
     const strengths=evidence.filter(x=>x.score>=75).slice(0,4), weaknesses=evidence.filter(x=>x.score<60).slice(0,4);
     const invalidation=[];
@@ -43,9 +55,9 @@ export async function GET(request){
     if(risk!=null&&risk<55)invalidation.push("Risk remains elevated or deteriorates further.");
     if(["STALE","VERY_STALE","MISSING"].includes(String(freshness).toUpperCase()))invalidation.push("Financial data needs to become current before adding conviction.");
     invalidation.push("Portfolio weight crosses the concentration guardrail.");
-    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,generated_at:new Date().toISOString(),instrument:i.data||{id:instrumentId},holding:{...holding,pnl_pct:Number(n(pnl)?.toFixed(2)||0)},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence:n(score.confidence),data_completeness:n(score.data_completeness),freshness_status:freshness,score_version:SCORE_VERSION},score,evidence,strengths,weaknesses,invalidation_checks:invalidation,market_regime:mr.data||null,decision:{action:score.action||null,reason:breakdown.reason||score.ai_summary||"Decision explanation is not available.",source:"decision_engine_v5_4"}});
+    return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,generated_at:new Date().toISOString(),instrument:i.data||{id:instrumentId},holding:{...holding,pnl_pct:Number(n(pnl)?.toFixed(2)||0)},scores:{long_term:lt,long_term_grade:gradeLT(lt),short_term:st,short_term_grade:gradeST(st),risk,valuation,final,final_grade:gradeFinal(final),confidence,data_completeness:completeness,freshness_status:freshness,score_version:SCORE_VERSION},score,evidence,strengths,weaknesses,invalidation_checks:invalidation,market_regime:mr.data||null,decision:{action,reason:action==="EXIT"&&risk!=null&&risk<25?"Severe risk safety override.":breakdown.reason||score.ai_summary||"Decision explanation is not available.",source:"decision_engine_v5_5"}});
   }catch(error){
-    console.error("Holding intelligence v2.2 error:",error);
+    console.error("Holding intelligence v2.3 error:",error);
     return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Holding intelligence failed."},{status:500});
   }
 }
