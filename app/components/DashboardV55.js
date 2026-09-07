@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import V55DecisionTable from "./V55DecisionTable";
+import IntradayScanner from "./IntradayScanner";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -199,6 +200,8 @@ export default function DashboardV55() {
           <div className={mfValue - mfInvested >= 0 ? "positive" : "negative"}>P/L {money(mfValue - mfInvested)}</div>
         </div>
       </section>
+
+      <IntradayScanner />
 
       <section className="card" style={{ marginTop: 20 }}>
         <div>
