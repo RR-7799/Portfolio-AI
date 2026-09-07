@@ -4,15 +4,19 @@ import { getTechnicalForIsin } from "../../../lib/upstox-technical";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
-const ENGINE_VERSION = "decision_validation_v1_0";
+const ENGINE_VERSION = "decision_validation_v1_1";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 const n = v => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const up = v => String(v || "").toUpperCase();
 
 function authorized(request) {
-  const secret = process.env.PIPELINE_SECRET || "";
-  return !!secret && ((request.headers.get("x-pipeline-secret") || "") === secret || (request.headers.get("authorization") || "") === `Bearer ${secret}`);
+  const pipeline = process.env.PIPELINE_SECRET || "";
+  const cron = process.env.CRON_SECRET || "";
+  const auth = request.headers.get("authorization") || "";
+  const pipelineOk = !!pipeline && ((request.headers.get("x-pipeline-secret") || "") === pipeline || auth === `Bearer ${pipeline}`);
+  const cronOk = !!cron && auth === `Bearer ${cron}`;
+  return pipelineOk || cronOk;
 }
 function thesisAction(s) {
   const lt = n(s.long_term_score), risk = n(s.risk_score), conf = n(s.confidence), complete = n(s.data_completeness), fresh = up(s.freshness_status);
@@ -49,13 +53,24 @@ export async function GET(request) {
       }
       rows.push({ user_id: score.user_id, instrument_id: score.instrument_id, score_version: SCORE_VERSION, snapshot_at: score.calculated_at || score.updated_at || new Date().toISOString(), long_term_score: score.long_term_score, short_term_score: score.short_term_score, risk_score: score.risk_score, valuation_score: score.valuation_score, final_ai_score: score.final_ai_score, confidence: score.confidence, data_completeness: score.data_completeness, freshness_status: score.freshness_status, thesis_action: thesisAction(score), reference_price: price, price_source: priceSource });
     }
+    let captured = 0;
+    let skipped = 0;
     if (rows.length) {
-      const { error } = await admin.from("decision_validation_ledger").insert(rows);
-      if (error) throw error;
+      const keys = rows.map(x => `${x.user_id}|${x.instrument_id}|${x.score_version}|${x.snapshot_at}`);
+      const { data: existing, error: ee } = await admin.from("decision_validation_ledger").select("user_id,instrument_id,score_version,snapshot_at").eq("score_version", SCORE_VERSION);
+      if (ee) throw ee;
+      const existingKeys = new Set((existing || []).map(x => `${x.user_id}|${x.instrument_id}|${x.score_version}|${x.snapshot_at}`));
+      const freshRows = rows.filter((x, i) => !existingKeys.has(keys[i]));
+      skipped = rows.length - freshRows.length;
+      if (freshRows.length) {
+        const { error } = await admin.from("decision_validation_ledger").insert(freshRows);
+        if (error) throw error;
+        captured = freshRows.length;
+      }
     }
     const withPrice = rows.filter(x => x.reference_price != null).length;
     const actions = rows.reduce((a, x) => { a[x.thesis_action] = (a[x.thesis_action] || 0) + 1; return a; }, {});
-    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, score_version: SCORE_VERSION, captured: rows.length, with_reference_price: withPrice, action_counts: actions, elapsed_ms: Date.now() - started });
+    return NextResponse.json({ success: true, engine_version: ENGINE_VERSION, score_version: SCORE_VERSION, captured, skipped_duplicates: skipped, scanned: rows.length, with_reference_price: withPrice, action_counts: actions, elapsed_ms: Date.now() - started });
   } catch (error) {
     console.error("Decision validation capture error:", error);
     return NextResponse.json({ success: false, engine_version: ENGINE_VERSION, error: error?.message || "Validation capture failed." }, { status: 500 });
