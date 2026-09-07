@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const money = (n) => Number.isFinite(Number(n)) ? `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—";
-const pct = (n) => Number.isFinite(Number(n)) ? `${Number(n).toFixed(2)}%` : "—";
+const pct = (n) => Number.isFinite(Number(n)) ? `${Number(n).toFixed(1)}%` : "—";
 
 function SignalCard({ signal }) {
   const long = signal.direction === "LONG";
@@ -27,6 +27,11 @@ function SignalCard({ signal }) {
       <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 12, opacity: 0.8, fontSize: 13 }}>
         <span>Change {pct(signal.change_pct)}</span><span>RV {Number(signal.relative_volume || 0).toFixed(2)}x</span><span>VWAP {money(signal.vwap)}</span>
       </div>
+      <div style={{ marginTop: 14, padding: 10, borderRadius: 8, background: "rgba(127,127,127,.08)" }}>
+        <span className="label">EXPECTED TRADE WINDOW</span>
+        <div style={{ marginTop: 5, fontWeight: 600 }}>10–30 min</div>
+        <small style={{ opacity: 0.7 }}>Timeline is measured after the signal. Actual outcome is tracked separately.</small>
+      </div>
     </div>
   );
 }
@@ -42,7 +47,16 @@ function TrackRecord({ analytics }) {
         <div><span className="label">AVG R</span><div>{Number(analytics.avg_r || 0).toFixed(2)}R</div></div>
         <div><span className="label">PROFIT FACTOR</span><div>{analytics.profit_factor == null ? "—" : Number(analytics.profit_factor).toFixed(2)}</div></div>
       </div>
-      <div style={{ marginTop: 12, opacity: 0.65, fontSize: 12 }}>Only closed signals count. No performance claim is made until a meaningful sample exists.</div>
+      <div style={{ marginTop: 16, fontWeight: 600 }}>Timeline accuracy</div>
+      <div className="grid two" style={{ marginTop: 8, gap: 10 }}>
+        {(analytics.horizons || []).map(h => (
+          <div key={h.minutes} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <span>{h.minutes} min</span><strong>{h.accuracy == null ? "—" : `${h.accuracy}%`} <small style={{ opacity: .6 }}>({h.samples})</small></strong>
+          </div>
+        ))}
+      </div>
+      {analytics.best_horizon && <div style={{ marginTop: 12, fontSize: 13 }}>Best observed horizon: <strong>{analytics.best_horizon.minutes} min</strong> at <strong>{analytics.best_horizon.accuracy}%</strong> accuracy.</div>}
+      <div style={{ marginTop: 12, opacity: 0.65, fontSize: 12 }}>Timeline accuracy is directional accuracy at the stated horizon, not a guaranteed profit rate. A horizon is only highlighted after enough observations.</div>
     </div>
   );
 }
@@ -53,52 +67,19 @@ export default function IntradayScanner() {
   const [message, setMessage] = useState("");
   const [meta, setMeta] = useState(null);
   const [analytics, setAnalytics] = useState(null);
-
-  const getToken = useCallback(async () => {
-    const { data } = await supabase.auth.getSession();
-    if (!data.session?.access_token) throw new Error("Authentication required.");
-    return data.session.access_token;
-  }, []);
-
-  const loadAnalytics = useCallback(async (token) => {
-    try {
-      const response = await fetch("/api/intraday-analytics", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-      const body = await response.json();
-      if (response.ok && body.success) setAnalytics(body);
-    } catch {}
-  }, []);
-
-  const scan = useCallback(async () => {
-    setStatus("loading"); setMessage("");
-    try {
-      const token = await getToken();
-      const response = await fetch("/api/intraday-scanner", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-      const body = await response.json();
-      if (!response.ok || !body.success) throw new Error(body.error || "Intraday scan failed.");
-      setSignals(body.signals || []); setMeta(body); setStatus("ready");
-      await loadAnalytics(token);
-    } catch (error) { setStatus("error"); setMessage(error.message || "Intraday scan failed."); }
-  }, [getToken, loadAnalytics]);
-
+  const getToken = useCallback(async () => { const { data } = await supabase.auth.getSession(); if (!data.session?.access_token) throw new Error("Authentication required."); return data.session.access_token; }, []);
+  const loadAnalytics = useCallback(async (token) => { try { const response = await fetch("/api/intraday-analytics", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (response.ok && body.success) setAnalytics(body); } catch {} }, []);
+  const scan = useCallback(async () => { setStatus("loading"); setMessage(""); try { const token = await getToken(); const response = await fetch("/api/intraday-scanner", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (!response.ok || !body.success) throw new Error(body.error || "Intraday scan failed."); setSignals(body.signals || []); setMeta(body); setStatus("ready"); await loadAnalytics(token); } catch (error) { setStatus("error"); setMessage(error.message || "Intraday scan failed."); } }, [getToken, loadAnalytics]);
   useEffect(() => { scan(); }, [scan]);
-
   return (
     <section className="card" style={{ marginTop: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-        <div>
-          <span className="label">INTRADAY AI / LIVE</span>
-          <h2 style={{ marginTop: 8 }}>Nifty LargeMidcap 250 Scanner</h2>
-          <p>Only higher-quality setups are shown. The machine prefers controlled risk over maximum signal count.</p>
-        </div>
+        <div><span className="label">INTRADAY AI / LIVE</span><h2 style={{ marginTop: 8 }}>Nifty LargeMidcap 250 Scanner</h2><p>Only higher-quality setups are shown. The machine prefers controlled risk over maximum signal count.</p></div>
         <button className="primary" onClick={scan} disabled={status === "loading"}>{status === "loading" ? "Scanning…" : "Scan now"}</button>
       </div>
       {status === "loading" && <p style={{ marginTop: 18 }}>Scanning 250 constituents and applying risk gates…</p>}
       {status === "error" && <div className="error" style={{ marginTop: 18 }}>{message}</div>}
-      {status === "ready" && meta && (
-        <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>
-          Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.8}% · {meta.elapsed_ms}ms
-        </div>
-      )}
+      {status === "ready" && meta && <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.8}% · {meta.elapsed_ms}ms</div>}
       <TrackRecord analytics={analytics} />
       {status === "ready" && signals.length === 0 && <p style={{ marginTop: 18 }}>No qualifying low-risk intraday setup right now. That is a valid result — the machine does not force a trade.</p>}
       {signals.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginTop: 20 }}>{signals.map((signal) => <SignalCard key={`${signal.instrument_key}-${signal.direction}-${signal.setup}`} signal={signal} />)}</div>}
