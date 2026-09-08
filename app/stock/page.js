@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
 
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const money = (n) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(n || 0));
 const num = (n, d = 2) => Number(n ?? 0).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -15,15 +17,33 @@ export default function StockPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("instrument_id");
-    if (!id) { setError("Missing instrument_id"); setLoading(false); return; }
-    fetch(`/api/stock-intelligence?instrument_id=${encodeURIComponent(id)}`, { cache: "no-store" })
-      .then(async (r) => { const body = await r.json(); if (!r.ok || !body.success) throw new Error(body.error || "Unable to load stock intelligence"); return body; })
-      .then(setData).catch((e) => setError(e.message)).finally(() => setLoading(false));
+    let mounted = true;
+    async function load() {
+      try {
+        const id = new URLSearchParams(window.location.search).get("instrument_id");
+        if (!id) throw new Error("Missing instrument_id");
+        const { data: sessionData } = await supabase.auth.getSession();
+        const session = sessionData?.session;
+        if (!session?.access_token) throw new Error("Authentication required.");
+        const response = await fetch(`/api/stock-intelligence?instrument_id=${encodeURIComponent(id)}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          cache: "no-store",
+        });
+        const body = await response.json();
+        if (!response.ok || !body.success) throw new Error(body.error || "Unable to load stock intelligence");
+        if (mounted) setData(body);
+      } catch (e) {
+        if (mounted) setError(e.message || "Unable to load stock intelligence");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    load();
+    return () => { mounted = false; };
   }, []);
 
   if (loading) return <main className="stockShell"><div className="card"><h2>Loading stock intelligence…</h2></div></main>;
-  if (error) return <main className="stockShell"><div className="card"><h2>Unable to load</h2><p>{error}</p><Link href="/ai">← Back to AI View</Link></div></main>;
+  if (error) return <main className="stockShell"><div className="card"><h2>Unable to load</h2><p>{error}</p><Link href="/alerts">← Back to Alerts</Link></div></main>;
 
   const { instrument, portfolio, ai_score, key_metrics } = data;
   const b = ai_score?.breakdown || {};
@@ -36,13 +56,13 @@ export default function StockPage() {
       <div className="stockTop"><Link href="/ai">← AI Investment View</Link><span className="muted">Portfolio AI</span></div>
       <section className="card heroStock">
         <div><div className="eyebrow">{instrument.sector || "OTHER"}</div><h1>{instrument.company_name}</h1><p>{instrument.symbol}</p></div>
-        <div className="heroScore"><span className="label">AI SCORE</span><strong>{ai_score?.total_score ?? "—"}</strong><div><Badge tone={toneForAction(ai_score?.action)}>{ai_score?.action || "—"}</Badge> <Badge>{ai_score?.rating || "—"}</Badge></div></div>
+        <div className="heroScore"><span className="label">AI SCORE</span><strong>{ai_score?.total_score ?? ai_score?.final_ai_score ?? "—"}</strong><div><Badge tone={toneForAction(ai_score?.action)}>{ai_score?.action || "—"}</Badge> <Badge>{ai_score?.rating || "—"}</Badge></div></div>
       </section>
       <section className="card marketLinkCard"><div><div className="eyebrow">MARKET INTELLIGENCE</div><h2>See live price, trend, momentum and trade levels</h2><p>Upstox market data with moving averages, RSI, MACD, volatility, 52-week levels and quantitative reference levels.</p></div><Link href={`/market?instrument_id=${encodeURIComponent(instrumentId || "")}`}><button className="primaryAction">Open Market View →</button></Link></section>
       <section className="grid three">
         <div className="card"><span className="label">RISK</span><h2>{ai_score?.risk_level || "—"}</h2><p>Model risk assessment</p></div>
-        <div className="card"><span className="label">CONFIDENCE</span><h2>{freshness.effective_confidence ?? "—"}%</h2><p>After freshness adjustment</p></div>
-        <div className="card"><span className="label">FRESHNESS</span><h2>{freshness.status || "—"}</h2><p>{freshness.financial_period || "No period"}</p></div>
+        <div className="card"><span className="label">CONFIDENCE</span><h2>{freshness.effective_confidence ?? ai_score?.confidence ?? "—"}%</h2><p>After freshness adjustment</p></div>
+        <div className="card"><span className="label">FRESHNESS</span><h2>{freshness.status || ai_score?.freshness_status || "—"}</h2><p>{freshness.financial_period || "No period"}</p></div>
       </section>
       <section className="card">
         <div className="sectionHead"><h2>Why the model says this</h2><span className="muted">Engine: {data.engine_version}</span></div>
