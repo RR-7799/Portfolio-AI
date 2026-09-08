@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
 
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const fmt = (v, d = 2) => v == null ? "—" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
 const money = (v) => v == null ? "—" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(v));
 const pct = (v) => v == null ? "—" : `${Number(v).toFixed(2)}%`;
@@ -25,29 +27,37 @@ export default function MarketPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("instrument_id");
-    if (!id) { setError("Missing instrument_id"); setLoading(false); return; }
+    let mounted = true;
+    async function load() {
+      const id = new URLSearchParams(window.location.search).get("instrument_id");
+      if (!id) { if (mounted) { setError("Missing instrument_id"); setLoading(false); } return; }
 
-    (async () => {
       try {
-        const s = await fetch(`/api/stock-intelligence?instrument_id=${encodeURIComponent(id)}`, { cache: "no-store" });
+        const { data: sessionData } = await supabase.auth.getSession();
+        const session = sessionData?.session;
+        if (!session?.access_token) throw new Error("Authentication required.");
+        const authHeaders = { Authorization: `Bearer ${session.access_token}` };
+
+        const s = await fetch(`/api/stock-intelligence?instrument_id=${encodeURIComponent(id)}`, { headers: authHeaders, cache: "no-store" });
         const sb = await s.json();
         if (!s.ok || !sb.success) throw new Error(sb.error || "Unable to load stock.");
-        setStock(sb.instrument);
+        if (mounted) setStock(sb.instrument);
         const isin = sb.instrument?.symbol;
         if (!isin || !String(isin).startsWith("INE")) throw new Error("This holding does not have an NSE equity ISIN suitable for market analysis.");
 
         const m = await fetch(`/api/market-intelligence?isin=${encodeURIComponent(isin)}&days=365`, { cache: "no-store" });
         const mb = await m.json();
         if (!m.ok || !mb.success) throw new Error(mb.error || "Unable to load market intelligence.");
-        setData(mb);
-      } catch (e) { setError(e.message || "Unable to load market intelligence."); }
-      finally { setLoading(false); }
-    })();
+        if (mounted) setData(mb);
+      } catch (e) { if (mounted) setError(e.message || "Unable to load market intelligence."); }
+      finally { if (mounted) setLoading(false); }
+    }
+    load();
+    return () => { mounted = false; };
   }, []);
 
   if (loading) return <main className="stockShell"><div className="card"><h2>Loading market intelligence…</h2></div></main>;
-  if (error) return <main className="stockShell"><div className="card"><h2>Unable to load</h2><p>{error}</p><Link href="/ai">← Back to AI View</Link></div></main>;
+  if (error) return <main className="stockShell"><div className="card"><h2>Unable to load</h2><p>{error}</p><Link href="/stock">← Back to Stock Intelligence</Link></div></main>;
 
   const t = data.technical;
   return <main className="stockShell">
