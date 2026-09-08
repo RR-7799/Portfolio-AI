@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const ENGINE_VERSION = "rebalance_v1_5";
+const ENGINE_VERSION = "rebalance_v1_6";
 const SCORE_VERSION = "ai_scorer_v5_5";
 const n = x => { const v = Number(x); return Number.isFinite(v) ? v : null; };
 const clamp = (x,a,b) => Math.max(a,Math.min(b,x));
+const badFreshness = new Set(["MISSING","STALE","VERY_STALE"]);
+const highRisk = new Set(["HIGH","VERY HIGH","CRITICAL"]);
 
 function thesisAction(longTermScore, riskScore) {
   const lt = n(longTermScore);
@@ -16,19 +18,25 @@ function thesisAction(longTermScore, riskScore) {
   return "BUY";
 }
 
-function targetWeight({ longTermScore, risk, currentWeight, action }) {
+function allocationEligibility({ longTermScore, risk, confidence, dataCompleteness, freshness }) {
+  const lt = n(longTermScore);
+  if (lt == null || lt < 70) return false;
+  if (highRisk.has(String(risk || "").toUpperCase())) return false;
+  if (n(confidence) !== null && n(confidence) < 60) return false;
+  if (n(dataCompleteness) !== null && n(dataCompleteness) < 60) return false;
+  if (badFreshness.has(String(freshness || "MISSING").toUpperCase())) return false;
+  return true;
+}
+
+function targetWeight({ longTermScore, risk, currentWeight, eligible }) {
   const lt = n(longTermScore);
   const current = Math.max(n(currentWeight) || 0, 0);
-  if (lt == null || action === "WATCH") return null;
-  if (action === "EXIT") return 0;
+  if (!eligible || lt == null) return null;
+  let base = lt >= 82 ? 8 : lt >= 80 ? 7.5 : lt >= 75 ? 7 : 5.5;
   const r = String(risk || "UNKNOWN").toUpperCase();
-  let base = lt >= 82 ? 8 : lt >= 72 ? 6 : lt >= 60 ? 4 : lt >= 50 ? 2 : 0;
-  if (["HIGH","VERY HIGH","CRITICAL"].includes(r)) base *= 0.55;
-  else if (r === "MODERATE" || r === "LOW-MODERATE") base *= 0.85;
+  if (r === "MODERATE" || r === "LOW-MODERATE") base *= 0.85;
   if (current > 12) base = Math.min(base, 8);
-  base = Number(clamp(base,0,10).toFixed(2));
-  if (action !== "BUY") return Math.min(base, current);
-  return base;
+  return Number(clamp(base,0,10).toFixed(2));
 }
 
 export async function GET(request) {
@@ -67,27 +75,32 @@ export async function GET(request) {
       const currentWeight = totalValue ? pos.current_value/totalValue*100 : 0;
       const longTermScore = score.long_term_score ?? null;
       const thesis = thesisAction(longTermScore, score.risk_score);
-      const target = targetWeight({longTermScore,risk:score.risk_level,currentWeight,action:thesis});
-      return {id,company_name:inst.company_name||"Unknown",symbol:inst.symbol||"—",sector:inst.sector||"OTHER",current_value:pos.current_value||0,current_weight:Number(currentWeight.toFixed(2)),score:score.final_ai_score??null,long_term_score:longTermScore,short_term_score:score.short_term_score??null,risk_score:score.risk_score??null,valuation_score:score.valuation_score??null,risk:score.risk_level||"—",action:thesis,scorer_action:score.action||null,score_version:score.score_version||"MISSING",target_weight:target,difference:target==null?null:Number((target-currentWeight).toFixed(2))};
-    }).sort((a,b)=>(b.difference??-Infinity)-(a.difference??-Infinity));
+      const eligible = allocationEligibility({longTermScore,risk:score.risk_level,confidence:score.confidence,dataCompleteness:score.data_completeness,freshness:score.freshness_status});
+      const target = targetWeight({longTermScore,risk:score.risk_level,currentWeight,eligible});
+      return {id,company_name:inst.company_name||"Unknown",symbol:inst.symbol||"—",sector:inst.sector||"OTHER",current_value:pos.current_value||0,current_weight:Number(currentWeight.toFixed(2)),score:score.final_ai_score??null,long_term_score:longTermScore,short_term_score:score.short_term_score??null,risk_score:score.risk_score??null,valuation_score:score.valuation_score??null,risk:score.risk_level||"—",action:thesis,scorer_action:score.action||null,score_version:score.score_version||"MISSING",confidence:score.confidence??null,data_completeness:score.data_completeness??null,freshness:score.freshness_status||"MISSING",allocation_eligible:eligible,target_weight:target,difference:target==null?null:Number((target-currentWeight).toFixed(2))};
+    }).sort((a,b)=>{
+      if (a.allocation_eligible !== b.allocation_eligible) return a.allocation_eligible ? -1 : 1;
+      return (b.long_term_score??-Infinity)-(a.long_term_score??-Infinity);
+    });
     const deployable = Math.max(totalValue,0);
     const actions = rows.map(r => {
-      if (r.target_weight == null || r.action === "WATCH") return {...r,action_plan:"WATCH",estimated_rupees:0};
+      if (!r.allocation_eligible || r.target_weight == null) return {...r,action_plan:r.action==="EXIT"?"TRIM/EXIT":"HOLD",estimated_rupees:0};
       const delta = deployable*(r.difference/100);
       let actionPlan = "HOLD";
       if (r.action === "EXIT" && r.current_weight > 0.5) actionPlan = "TRIM/EXIT";
-      else if (r.action === "REDUCE") actionPlan = r.difference < -0.5 ? "TRIM" : "HOLD";
-      else if (r.action === "BUY" && r.difference > 1.5) actionPlan = "ADD";
-      else if (r.action === "BUY" && r.difference < -2) actionPlan = "TRIM";
+      else if (r.allocation_eligible && r.difference > 1.0) actionPlan = "ADD";
+      else if (r.action === "REDUCE" && r.difference < -0.5) actionPlan = "TRIM";
       return {...r,action_plan:actionPlan,estimated_rupees:Number(Math.abs(delta).toFixed(0))};
     });
     const warnings = [];
     const top = rows.slice().sort((a,b)=>b.current_weight-a.current_weight).slice(0,5).reduce((s,r)=>s+r.current_weight,0);
     if (top > 55) warnings.push(`Top 5 holdings represent ${top.toFixed(1)}% of portfolio.`);
-    const high = rows.filter(r=>["HIGH","VERY HIGH","CRITICAL"].includes(r.risk)).reduce((s,r)=>s+r.current_weight,0);
+    const high = rows.filter(r=>highRisk.has(r.risk)).reduce((s,r)=>s+r.current_weight,0);
     if (high > 20) warnings.push(`High-risk holdings represent ${high.toFixed(1)}% of portfolio.`);
-    const missing = rows.filter(r=>r.target_weight==null).length;
-    if (missing) warnings.push(`${missing} holding(s) have no V5.5 long-term score; no allocation change is recommended for them.`);
+    const eligibleCount = rows.filter(r=>r.allocation_eligible).length;
+    if (eligibleCount) warnings.push(`${eligibleCount} long-term candidates meet the V5.5 fundamentals, data-quality and risk gates. Short-term score is not used for eligibility.`);
+    const missing = rows.filter(r=>r.score_version!==SCORE_VERSION).length;
+    if (missing) warnings.push(`${missing} holding(s) have no V5.5 score; no allocation change is recommended for them.`);
     return NextResponse.json({success:true,engine_version:ENGINE_VERSION,score_version:SCORE_VERSION,portfolio:{stock_value:stockValue,cash,total_value:totalValue},rows:actions,warnings});
   } catch (error) {
     return NextResponse.json({success:false,engine_version:ENGINE_VERSION,error:error?.message||"Rebalance failed."},{status:500});
