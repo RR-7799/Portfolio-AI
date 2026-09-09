@@ -7,6 +7,10 @@
     {
       "path": "/api/decision-validation/evaluate",
       "schedule": "0 17 * * *"
+    },
+    {
+      "path": "/api/intraday-signal-outcomes/market-close",
+      "schedule": "0 10 * * 1-5"
     }
   ]
 }
