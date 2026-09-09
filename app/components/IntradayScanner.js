@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import IntradayPaperTradeHistory from "./IntradayPaperTradeHistory";
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 const money = (n) => Number.isFinite(Number(n)) ? `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—";
@@ -108,10 +109,11 @@ export default function IntradayScanner() {
   const [message, setMessage] = useState("");
   const [meta, setMeta] = useState(null);
   const [analytics, setAnalytics] = useState(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const getToken = useCallback(async () => { const { data } = await supabase.auth.getSession(); if (!data.session?.access_token) throw new Error("Authentication required."); return data.session.access_token; }, []);
   const loadAnalytics = useCallback(async (token) => { try { const response = await fetch("/api/intraday-analytics", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (response.ok && body.success) setAnalytics(body); } catch {} }, []);
-  const evaluateOutcomes = useCallback(async (token) => { try { const response = await fetch("/api/intraday-signal-outcomes/evaluate", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (response.ok && body.success) await loadAnalytics(token); } catch {} }, [loadAnalytics]);
-  const scan = useCallback(async () => { setStatus("loading"); setMessage(""); try { const token = await getToken(); const response = await fetch("/api/intraday-scanner", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (!response.ok || !body.success) throw new Error(body.error || "Intraday scan failed."); setSignals(body.signals || []); setMeta(body); setStatus("ready"); await evaluateOutcomes(token); } catch (error) { setStatus("error"); setMessage(error.message || "Intraday scan failed."); } }, [getToken, evaluateOutcomes]);
+  const evaluateOutcomes = useCallback(async (token) => { try { const response = await fetch("/api/intraday-signal-outcomes/evaluate", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (response.ok && body.success) { await loadAnalytics(token); setHistoryRefreshKey(key => key + 1); } } catch {} }, [loadAnalytics]);
+  const scan = useCallback(async () => { setStatus("loading"); setMessage(""); try { const token = await getToken(); const response = await fetch("/api/intraday-scanner", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }); const body = await response.json(); if (!response.ok || !body.success) throw new Error(body.error || "Intraday scan failed."); setSignals(body.signals || []); setMeta(body); setStatus("ready"); await evaluateOutcomes(token); setHistoryRefreshKey(key => key + 1); } catch (error) { setStatus("error"); setMessage(error.message || "Intraday scan failed."); } }, [getToken, evaluateOutcomes]);
   useEffect(() => { scan(); }, [scan]);
   useEffect(() => { let timer; const refreshOutcomes = async () => { try { const token = await getToken(); await evaluateOutcomes(token); } catch {} }; refreshOutcomes(); timer = window.setInterval(refreshOutcomes, 5 * 60 * 1000); return () => window.clearInterval(timer); }, [getToken, evaluateOutcomes]);
   return (
@@ -125,6 +127,7 @@ export default function IntradayScanner() {
       {status === "ready" && meta && <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>Universe {meta.universe_count} · Quotes {meta.quote_count} · Signals {meta.signal_count} · Risk cap {meta.risk_policy?.max_risk_pct ?? 0.6}% · {meta.elapsed_ms}ms</div>}
       {status === "ready" && meta?.rejection_funnel && <RejectionFunnel funnel={{ ...meta.rejection_funnel, candle_failures: meta.candle_failures }} />}
       <TrackRecord analytics={analytics} />
+      <IntradayPaperTradeHistory getToken={getToken} refreshKey={historyRefreshKey} />
       {status === "ready" && signals.length === 0 && <p style={{ marginTop: 18 }}>No qualifying low-risk intraday setup right now. That is a valid result — the machine does not force a trade.</p>}
       {signals.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginTop: 20 }}>{signals.map((signal) => <SignalCard key={`${signal.instrument_key}-${signal.direction}-${signal.setup}`} signal={signal} />)}</div>}
       <p style={{ marginTop: 18, fontSize: 12, opacity: 0.6 }}>Research tool only. Entry, stop and targets are model-generated levels, not guaranteed execution prices or investment advice.</p>
