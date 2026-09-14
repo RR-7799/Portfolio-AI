@@ -11,6 +11,14 @@
     {
       "path": "/api/intraday-signal-outcomes/market-close",
       "schedule": "0 10 * * 1-5"
+    },
+    {
+      "path": "/api/intraday-scanner",
+      "schedule": "50 3 * * 1-5"
+    },
+    {
+      "path": "/api/intraday-scanner",
+      "schedule": "*/10 4-9 * * 1-5"
     }
   ]
 }
